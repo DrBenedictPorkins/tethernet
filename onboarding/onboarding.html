@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tethernet — Setup</title>
+  <link rel="stylesheet" href="onboarding.css">
+</head>
+<body>
+  <div class="container">
+
+    <div class="header">
+      <svg width="52" height="52" viewBox="0 0 96 96" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <rect width="96" height="96" rx="20" fill="#111118"/>
+        <ellipse cx="68" cy="28" rx="14" ry="14" stroke="#00E5D0" stroke-width="2.2" fill="none"/>
+        <line x1="20" y1="76" x2="57" y2="38" stroke="#00E5D0" stroke-width="2.5" stroke-linecap="round"/>
+        <circle cx="56.5" cy="36.5" r="3.5" fill="#111118"/>
+        <circle cx="20" cy="76" r="6" fill="#00E5D0" opacity="0.2"/>
+        <circle cx="20" cy="76" r="4.5" fill="#00E5D0"/>
+        <circle cx="20" cy="76" r="2" fill="#80FFF0"/>
+        <circle cx="68" cy="28" r="5" fill="#00E5D0"/>
+        <circle cx="68" cy="28" r="2.2" fill="#80FFF0"/>
+      </svg>
+      <h1>Tethernet</h1>
+      <p class="subtitle">Browser Co-Pilot for Claude Code</p>
+    </div>
+
+    <div class="section">
+      <h2>What is Tethernet?</h2>
+      <p>Tethernet connects your Chrome browser to <strong>Claude Code</strong> running on your local machine. It lets Claude read pages, take screenshots, interact with forms, and capture network traffic to help you debug and explore your own sites.</p>
+      <p class="highlight">All connections are to <strong>localhost only</strong>. No data is sent to any external server by this extension.</p>
+    </div>
+
+    <div class="section">
+      <h2>What Tethernet Can Access</h2>
+      <p>Once connected to a Claude Code session, the following capabilities are active:</p>
+
+      <div class="capability">
+        <div class="cap-icon">&#128196;</div>
+        <div>
+          <strong>Page Content &amp; Screenshots</strong>
+          <span>Read page text, DOM structure, and take screenshots of any open tab.</span>
+        </div>
+      </div>
+
+      <div class="capability">
+        <div class="cap-icon">&#128424;</div>
+        <div>
+          <strong>Script Execution</strong>
+          <span>Run JavaScript in a page to inspect element state, read storage, or extract data.</span>
+        </div>
+      </div>
+
+      <div class="capability">
+        <div class="cap-icon">&#128433;</div>
+        <div>
+          <strong>Page Interaction</strong>
+          <span>Click, type, scroll, and fill forms on your behalf when you ask Claude to help with a task.</span>
+        </div>
+      </div>
+
+      <div class="capability">
+        <div class="cap-icon">&#128225;</div>
+        <div>
+          <strong>Network Traffic</strong>
+          <span>Capture HTTP requests and responses on demand to debug API calls — including response bodies without opening DevTools.</span>
+        </div>
+      </div>
+
+      <div class="capability">
+        <div class="cap-icon">&#128274;</div>
+        <div>
+          <strong>Cookies &amp; Authentication State</strong>
+          <span>Read non-HttpOnly cookies to help debug authentication and session issues. Note: Chrome does not expose HttpOnly cookies to extensions.</span>
+        </div>
+      </div>
+
+      <div class="capability">
+        <div class="cap-icon">&#127760;</div>
+        <div>
+          <strong>Tab Management</strong>
+          <span>See open tabs, switch between them, and open or close tabs as needed.</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="section risk-section">
+      <div class="risk-heading">
+        <span class="risk-icon">&#9888;</span>
+        <h2>Understand the risks</h2>
+      </div>
+      <p class="risk-intro">Tethernet gives Claude direct access to your browser. Websites can contain hidden instructions designed to manipulate AI assistants into taking actions you never intended — a technique known as <strong>prompt injection</strong>.</p>
+
+      <div class="risk-box">
+        <p>A malicious page could attempt to instruct Claude to:</p>
+        <ul>
+          <li>Read sensitive content from other open tabs</li>
+          <li>Extract private data, tokens, or credentials from page storage</li>
+          <li>Submit forms or take actions on your accounts</li>
+          <li>Capture and expose authentication cookies</li>
+        </ul>
+      </div>
+
+      <div class="safe-tips">
+        <div class="safe-tip">
+          <span class="tip-icon">&#128737;</span>
+          <div>
+            <strong>Use on trusted sites</strong>
+            <span>Only connect Tethernet when working on sites you trust. Avoid using it on sites with user-generated content you haven't reviewed.</span>
+          </div>
+        </div>
+        <div class="safe-tip">
+          <span class="tip-icon">&#128065;</span>
+          <div>
+            <strong>Review before sensitive actions</strong>
+            <span>Always read what Claude is about to do before it interacts with accounts, forms, or anything involving your data.</span>
+          </div>
+        </div>
+        <div class="safe-tip">
+          <span class="tip-icon">&#128274;</span>
+          <div>
+            <strong>Disconnect when idle</strong>
+            <span>Tethernet is inactive when disconnected. Disconnect from the popup when you're not actively using it.</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="consent-section">
+      <h2>Enable Tethernet</h2>
+      <p class="consent-intro">This tool is intended for developers. By enabling it you confirm you understand what it can access and the risks described above.</p>
+
+      <label class="checkbox-label">
+        <input type="checkbox" id="consent-checkbox">
+        <span>I understand the risks and consent to Tethernet connecting my browser to my local Claude Code session.</span>
+      </label>
+
+      <button id="enable-btn" class="enable-btn" disabled>Enable Tethernet</button>
+      <p class="revoke-note">You can revoke consent and disconnect at any time from the extension popup.</p>
+    </div>
+
+  </div>
+  <script src="onboarding.js"></script>
+</body>
+</html>
