@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Coordinate Click Test</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      width: 2800px;
+      height: 2200px;
+      background: #0d1117;
+      font-family: 'Courier New', monospace;
+      position: relative;
+    }
+
+    /* dot grid */
+    body::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background-image: radial-gradient(circle, rgba(255,255,255,0.08) 1px, transparent 1px);
+      background-size: 80px 80px;
+      pointer-events: none;
+    }
+
+    /* axis ruler lines every 200px */
+    .ruler-h, .ruler-v {
+      position: absolute;
+      background: rgba(255,255,255,0.04);
+      pointer-events: none;
+    }
+    .ruler-h { height: 1px; left: 0; right: 0; }
+    .ruler-v { width: 1px; top: 0; bottom: 0; }
+
+    .ruler-label {
+      position: absolute;
+      font-size: 9px;
+      color: rgba(255,255,255,0.2);
+      font-family: monospace;
+      pointer-events: none;
+      user-select: none;
+    }
+
+    .btn {
+      position: absolute;
+      border: 2px solid rgba(255,255,255,0.15);
+      border-radius: 10px;
+      cursor: pointer;
+      font-family: 'Courier New', monospace;
+      font-weight: bold;
+      color: white;
+      transition: filter 0.15s, transform 0.15s;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      user-select: none;
+    }
+    .btn .lbl  { font-size: 16px; font-weight: 900; letter-spacing: 1px; }
+    .btn .dims { font-size: 9px;  opacity: 0.6; }
+    .btn .pos  { font-size: 9px;  opacity: 0.5; font-style: italic; }
+
+    .btn:hover { filter: brightness(1.4); transform: scale(1.04); }
+
+    .btn.highlighted {
+      border-color: #fff !important;
+      filter: brightness(1.6) !important;
+      box-shadow: 0 0 0 4px rgba(255,255,255,0.4), 0 0 30px currentColor;
+      z-index: 500 !important;
+    }
+
+    .btn.clicked-anim {
+      animation: pop 0.4s ease-out;
+    }
+    @keyframes pop {
+      0%   { transform: scale(1); }
+      40%  { transform: scale(1.14); }
+      100% { transform: scale(1); }
+    }
+
+    /* center dot on each button */
+    .center-dot {
+      position: absolute;
+      width: 8px; height: 8px;
+      background: rgba(255,255,255,0.7);
+      border: 2px solid rgba(0,0,0,0.5);
+      border-radius: 50%;
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+    }
+
+    /* crosshair marker drawn at click center */
+    .xhair {
+      position: absolute;
+      pointer-events: none;
+      transform: translate(-50%, -50%);
+      z-index: 9000;
+    }
+    .xhair::before, .xhair::after {
+      content: ''; position: absolute; background: #ff0;
+    }
+    .xhair::before { width: 2px; height: 32px; left: 15px; top: 0;  opacity: 0.9; }
+    .xhair::after  { width: 32px; height: 2px; left: 0;  top: 15px; opacity: 0.9; }
+    .xhair-ring {
+      position: absolute;
+      width: 32px; height: 32px;
+      border: 2px solid #ff0;
+      border-radius: 50%;
+      opacity: 0.6;
+    }
+    .xhair-label {
+      position: absolute;
+      top: 36px; left: 50%;
+      transform: translateX(-50%);
+      white-space: nowrap;
+      font-size: 10px;
+      font-family: monospace;
+      color: #ff0;
+      background: rgba(0,0,0,0.7);
+      padding: 2px 5px;
+      border-radius: 3px;
+    }
+
+    /* ── Log panel (fixed, always visible) ── */
+    #log {
+      position: fixed;
+      top: 0; right: 0;
+      width: 360px; height: 100vh;
+      background: rgba(8, 10, 20, 0.97);
+      border-left: 1px solid #1e2530;
+      padding: 14px 12px;
+      overflow-y: auto;
+      z-index: 9999;
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+    }
+    #log-title {
+      color: #58a6ff;
+      font-size: 12px;
+      font-weight: bold;
+      margin-bottom: 10px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #1e2530;
+      flex-shrink: 0;
+    }
+    #log-entries { flex: 1; overflow-y: auto; }
+
+    .entry {
+      margin-bottom: 12px;
+      padding: 10px;
+      background: rgba(255,255,255,0.03);
+      border-left: 3px solid #444;
+      border-radius: 0 5px 5px 0;
+      font-size: 10.5px;
+      line-height: 1.55;
+    }
+    .entry.native-entry  { border-left-color: #58a6ff; }
+    .entry.dom-entry     { border-left-color: #3fb950; }
+
+    .entry .etitle { font-size: 12px; font-weight: bold; color: #fff; margin-bottom: 7px; }
+    .entry .row  { margin: 1px 0; }
+    .entry .k    { color: #8b949e; display: inline-block; width: 72px; }
+    .entry .v    { color: #7ee787; font-weight: bold; }
+    .entry .fml  { color: #d29922; font-size: 9.5px; margin-top: 5px; line-height: 1.4; }
+    .entry .out  { color: #ff0; font-size: 12px; font-weight: bold; margin-top: 6px; }
+    .entry .note { color: #8b949e; font-size: 9px; margin-top: 4px; }
+
+    .placeholder { color: #444; font-size: 11px; line-height: 1.7; }
+  </style>
+</head>
+<body>
+
+<div id="log">
+  <div id="log-title">⚡ Coordinate Log</div>
+  <div id="log-entries">
+    <div class="placeholder">
+      Waiting for clicks…<br><br>
+      Each entry shows:<br>
+      • getBoundingClientRect()<br>
+      • viewport center (CSS px)<br>
+      • mozInnerScreenX/Y offset<br>
+      • computed OS click target<br><br>
+      Yellow crosshair = click center<br>
+      White dot = button center
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Button definitions (id, x, y, w, h, color) ──
+var BTNS = [
+  { id:'A', x:60,   y:70,   w:150, h:60,  bg:'#c0392b' },
+  { id:'B', x:280,  y:160,  w:90,  h:90,  bg:'#e67e22' },
+  { id:'C', x:480,  y:50,   w:200, h:75,  bg:'#d4ac0d', fg:'#111' },
+  { id:'D', x:780,  y:90,   w:120, h:55,  bg:'#27ae60' },
+  { id:'E', x:1000, y:40,   w:170, h:100, bg:'#2980b9' },
+  { id:'F', x:90,   y:320,  w:220, h:65,  bg:'#8e44ad' },
+  { id:'G', x:380,  y:280,  w:130, h:130, bg:'#16a085' },
+  { id:'H', x:620,  y:310,  w:100, h:50,  bg:'#e74c3c' },
+  { id:'I', x:830,  y:260,  w:80,  h:80,  bg:'#2c3e50' },
+  { id:'J', x:1050, y:300,  w:200, h:60,  bg:'#1abc9c' },
+  { id:'K', x:160,  y:520,  w:110, h:110, bg:'#e91e63' },
+  { id:'L', x:380,  y:490,  w:180, h:55,  bg:'#ff9800', fg:'#111' },
+  { id:'M', x:650,  y:470,  w:140, h:90,  bg:'#673ab7' },
+  { id:'N', x:920,  y:500,  w:90,  h:60,  bg:'#009688' },
+  { id:'O', x:80,   y:720,  w:160, h:70,  bg:'#3f51b5' },
+  { id:'P', x:320,  y:700,  w:100, h:100, bg:'#ff5722' },
+  { id:'Q', x:550,  y:680,  w:220, h:55,  bg:'#607d8b' },
+  { id:'R', x:850,  y:660,  w:130, h:80,  bg:'#8bc34a', fg:'#111' },
+  // Horizontal scroll zone (x > viewport width ~1974px)
+  { id:'S', x:2050, y:80,   w:160, h:80,  bg:'#e91e63' },
+  { id:'T', x:2250, y:220,  w:120, h:120, bg:'#ff9800', fg:'#111' },
+  { id:'U', x:2500, y:120,  w:200, h:90,  bg:'#00bcd4', fg:'#111' },
+  { id:'V', x:2050, y:500,  w:180, h:70,  bg:'#9c27b0' },
+  { id:'W', x:2350, y:600,  w:140, h:100, bg:'#4caf50', fg:'#111' },
+];
+
+// Draw ruler lines
+for (var n = 200; n < 2200; n += 200) {
+  var rh = document.createElement('div'); rh.className='ruler-h';
+  rh.style.top = n+'px';
+  document.body.appendChild(rh);
+  var lh = document.createElement('div'); lh.className='ruler-label';
+  lh.style.top = (n+2)+'px'; lh.style.left='4px';
+  lh.textContent='y='+n;
+  document.body.appendChild(lh);
+}
+for (var n = 200; n < 2800; n += 200) {
+  var rv = document.createElement('div'); rv.className='ruler-v';
+  rv.style.left = n+'px';
+  document.body.appendChild(rv);
+  var lv = document.createElement('div'); lv.className='ruler-label';
+  lv.style.left = (n+3)+'px'; lv.style.top='2px';
+  lv.textContent='x='+n;
+  document.body.appendChild(lv);
+}
+
+var clickCount = 0;
+
+BTNS.forEach(function(b) {
+  var el = document.createElement('button');
+  el.className = 'btn';
+  el.id = 'btn-'+b.id;
+  el.dataset.bid = b.id;
+  el.style.cssText = 'left:'+b.x+'px;top:'+b.y+'px;width:'+b.w+'px;height:'+b.h+'px;background:'+b.bg+';'+(b.fg?'color:'+b.fg+';':'');
+
+  el.innerHTML =
+    '<span class="lbl">BTN '+b.id+'</span>' +
+    '<span class="dims">'+b.w+'&times;'+b.h+'</span>' +
+    '<span class="pos">('+b.x+','+b.y+')</span>';
+
+  // center dot
+  var dot = document.createElement('div');
+  dot.className = 'center-dot';
+  dot.style.left = (b.w/2)+'px';
+  dot.style.top  = (b.h/2)+'px';
+  el.appendChild(dot);
+
+  document.body.appendChild(el);
+
+  el.addEventListener('click', function() { recordClick(el, 'dom'); });
+});
+
+function recordClick(el, source, serverX, serverY) {
+  clickCount++;
+  var r = el.getBoundingClientRect();
+  var cx = r.left + r.width  / 2;
+  var cy = r.top  + r.height / 2;
+
+  var mx = (typeof window.mozInnerScreenX !== 'undefined') ? window.mozInnerScreenX : null;
+  var my = (typeof window.mozInnerScreenY !== 'undefined') ? window.mozInnerScreenY : null;
+  var sx = window.screenX, sy = window.screenY;
+  var rawCh  = window.outerHeight - window.innerHeight;
+  var effCh  = Math.min(rawCh, 150);
+  var scroll = { x: window.scrollX, y: window.scrollY };
+
+  var hasMoz = (mx !== null);
+  var osX, osY, formula;
+  if (hasMoz) {
+    osX = Math.round(mx + r.left + r.width/2);
+    osY = Math.round(my + r.top  + r.height/2);
+    formula =
+      'mozInnerScreenX('+Math.round(mx)+') + rectLeft('+Math.round(r.left)+') + w/2('+Math.round(r.width/2)+')\n' +
+      'mozInnerScreenY('+Math.round(my)+') + rectTop(' +Math.round(r.top) +') + h/2('+Math.round(r.height/2)+')';
+  } else {
+    osX = Math.round(sx + r.left + r.width/2);
+    osY = Math.round(sy + effCh + r.top + r.height/2);
+    formula =
+      'screenX('+sx+') + rectLeft('+Math.round(r.left)+') + w/2('+Math.round(r.width/2)+')\n' +
+      'screenY('+sy+') + effCh('+effCh+') + rectTop('+Math.round(r.top)+') + h/2('+Math.round(r.height/2)+')';
+  }
+
+  // highlight button
+  document.querySelectorAll('.btn.highlighted').forEach(function(b){ b.classList.remove('highlighted','clicked-anim'); });
+  el.classList.add('highlighted','clicked-anim');
+
+  // crosshair at document-absolute center
+  document.querySelectorAll('.xhair').forEach(function(c){ c.remove(); });
+  var xh = document.createElement('div');
+  xh.className = 'xhair';
+  xh.style.left = (r.left + r.width/2  + scroll.x) + 'px';
+  xh.style.top  = (r.top  + r.height/2 + scroll.y) + 'px';
+  var ring = document.createElement('div'); ring.className='xhair-ring'; xh.appendChild(ring);
+  var xlbl = document.createElement('div'); xlbl.className='xhair-label';
+  xlbl.textContent = '('+Math.round(r.left+r.width/2)+', '+Math.round(r.top+r.height/2)+') viewport';
+  xh.appendChild(xlbl);
+  document.body.appendChild(xh);
+
+  // log entry
+  var isNative = (source === 'native');
+  var entry = document.createElement('div');
+  entry.className = 'entry ' + (isNative ? 'native-entry' : 'dom-entry');
+
+  var serverRow = '';
+  if (serverX !== undefined) {
+    var match = (serverX === osX && serverY === osY) ? ' ✓ match' : ' ⚠ differs from page calc';
+    serverRow = '<div class="row"><span class="k">server→</span><span class="v" style="color:#f7d">(' + serverX+','+serverY+')'+match+'</span></div>';
+  }
+
+  entry.innerHTML =
+    '<div class="etitle">#'+clickCount+' '+(isNative?'⚡ native_click':'🖱 dom click')+' — BTN '+el.dataset.bid+'</div>' +
+    '<div class="row"><span class="k">rect</span><span class="v">L='+Math.round(r.left)+' T='+Math.round(r.top)+' '+Math.round(r.width)+'&times;'+Math.round(r.height)+'</span></div>' +
+    '<div class="row"><span class="k">center</span><span class="v">('+Math.round(cx)+', '+Math.round(cy)+') viewport CSS</span></div>' +
+    '<div class="row"><span class="k">scroll</span><span class="v">('+scroll.x+', '+scroll.y+')</span></div>' +
+    '<div class="row"><span class="k">method</span><span class="v">'+(hasMoz?'mozInnerScreen':'screenXY+chrome')+'</span></div>' +
+    (hasMoz?
+      '<div class="row"><span class="k">mozScreen</span><span class="v">('+Math.round(mx)+', '+Math.round(my)+')</span></div>':
+      '<div class="row"><span class="k">screenXY</span><span class="v">('+sx+', '+sy+')</span></div>'+
+      '<div class="row"><span class="k">effCh</span><span class="v">'+effCh+'px (raw='+rawCh+')</span></div>'
+    ) +
+    serverRow +
+    '<div class="fml">'+formula+'</div>' +
+    '<div class="out">→ OS target: ('+osX+', '+osY+')</div>' +
+    '<div class="note">scroll: ('+scroll.x+','+scroll.y+') | dpr: '+window.devicePixelRatio+' | inner: '+window.innerWidth+'&times;'+window.innerHeight+'</div>';
+
+  var entries = document.getElementById('log-entries');
+  // clear placeholder on first entry
+  if (clickCount === 1) entries.innerHTML = '';
+  entries.insertBefore(entry, entries.firstChild);
+
+  window.__lastClick = { btnId: el.dataset.bid, rect:{left:r.left,top:r.top,width:r.width,height:r.height}, center:{x:cx,y:cy}, os:{x:osX,y:osY}, source };
+  return { btnId:el.dataset.bid, osX:osX, osY:osY };
+}
+
+// Called from execute_script BEFORE native_click fires — marks which button will be clicked
+window.__markTarget = function(btnId) {
+  var el = document.getElementById('btn-'+btnId);
+  if (!el) return { error:'not found' };
+  document.querySelectorAll('.btn.highlighted').forEach(function(b){ b.classList.remove('highlighted'); });
+  el.classList.add('highlighted');
+  var r = el.getBoundingClientRect();
+  return { left:r.left, top:r.top, width:r.width, height:r.height, centerX:r.left+r.width/2, centerY:r.top+r.height/2 };
+};
+
+// Called from execute_script AFTER native_click fires — logs it and shows actual server coords
+window.__recordNativeClick = function(btnId, serverX, serverY) {
+  var el = document.getElementById('btn-'+btnId);
+  if (!el) return { error:'not found' };
+  return recordClick(el, 'native', serverX, serverY);
+};
+</script>
+</body>
+</html>
