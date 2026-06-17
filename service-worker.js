@@ -285,6 +285,62 @@ async function handleServerCommand(action, params) {
       chrome.runtime.sendMessage({ type: 'passive_count_changed', count: 0 }).catch(() => {});
       return { cleared: true };
 
+    case 'summarize_passive_log': {
+      if (!passiveLog.length) return { enabled: passiveMode, count: 0, summary: null };
+
+      const netEvents = passiveLog.filter(e => !e.kind);
+      const interactions = passiveLog.filter(e => e.kind === 'interaction');
+      const times = passiveLog.map(e => e.t);
+      const fromMs = Math.min(...times);
+      const toMs = Math.max(...times);
+
+      // Group net events by domain
+      const domainMap = {};
+      for (const e of netEvents) {
+        let domain;
+        try { domain = new URL(e.url).hostname; } catch (_) { domain = 'unknown'; }
+        if (!domainMap[domain]) domainMap[domain] = { domain, count: 0, totalMs: 0, methods: {}, statuses: {}, slowest: null };
+        const d = domainMap[domain];
+        d.count++;
+        d.totalMs += e.ms || 0;
+        d.methods[e.method] = (d.methods[e.method] || 0) + 1;
+        d.statuses[e.status] = (d.statuses[e.status] || 0) + 1;
+        if (!d.slowest || e.ms > d.slowest.ms) d.slowest = { url: e.url, ms: e.ms };
+      }
+
+      const domains = Object.values(domainMap)
+        .map(d => ({ ...d, avgMs: Math.round(d.totalMs / d.count) }))
+        .sort((a, b) => b.count - a.count);
+
+      // Overall slowest
+      const slowest = [...netEvents]
+        .filter(e => e.ms > 0)
+        .sort((a, b) => b.ms - a.ms)
+        .slice(0, 10)
+        .map(e => ({ url: e.url, ms: e.ms, method: e.method, status: e.status }));
+
+      // Status code breakdown
+      const statusCodes = {};
+      for (const e of netEvents) statusCodes[e.status] = (statusCodes[e.status] || 0) + 1;
+
+      // Error calls (4xx/5xx)
+      const errors = netEvents.filter(e => e.status >= 400)
+        .map(e => ({ url: e.url, status: e.status, method: e.method, ms: e.ms }));
+
+      return {
+        enabled: passiveMode,
+        count: passiveLog.length,
+        netCount: netEvents.length,
+        interactionCount: interactions.length,
+        timespan: { fromMs, toMs, durationSec: Math.round((toMs - fromMs) / 1000) },
+        domains,
+        slowest,
+        statusCodes,
+        errors,
+        interactions,
+      };
+    }
+
     case 'click_element':
     case 'type_text':
     case 'press_key':
