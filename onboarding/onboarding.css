@@ -249,7 +249,26 @@ body {
 .consent-intro {
   font-size: 13px;
   color: #666;
+  margin-bottom: 16px;
+}
+
+.disclaimer-box {
+  background-color: rgba(255, 255, 255, 0.03);
+  border: 1px solid #2a2a3e;
+  border-radius: 6px;
+  padding: 12px 14px;
   margin-bottom: 20px;
+}
+
+.disclaimer-box p {
+  font-size: 11px;
+  color: #555;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.disclaimer-box strong {
+  color: #666;
 }
 
 .checkbox-label {

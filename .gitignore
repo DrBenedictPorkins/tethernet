@@ -1,5 +1,7 @@
 .DS_Store
 *.zip
+builds/
+.worktrees/
 
 # Leftover scratch files
 nextdoor-*.html

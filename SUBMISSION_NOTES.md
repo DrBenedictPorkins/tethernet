@@ -19,6 +19,7 @@ This is a **developer tool**. Not for general Chrome users. It requires a locall
 | `offscreen` | required | Offscreen document hosts the persistent WebSocket (MV3 service workers die after 30s) |
 | `debugger` | required | Response body capture without DevTools open |
 | `windows` | required | `windows.update` to focus correct window before screenshot |
+| `downloads` | required | Monitor download completion events to report filename, size, and MIME type after the user initiates a download. No files are downloaded autonomously. |
 | `<all_urls>` | host_permissions | Content scripts must run on any page the developer is working on |
 
 ---
@@ -111,7 +112,7 @@ The following approved extensions ship equivalent or more invasive capabilities:
 
 ```json
 permissions: ["tabs", "storage", "webNavigation", "webRequest", "cookies",
-              "scripting", "offscreen", "debugger", "windows"]
+              "scripting", "offscreen", "debugger", "windows", "downloads"]
 optional_permissions: (none — debugger cannot be optional in Chrome, Chrome silently omits it)
 host_permissions: ["<all_urls>"]
 ```

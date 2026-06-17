@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Tethernet Tool Tests</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 20px; color: #1a1a1a; }
+    h1 { font-size: 1.4rem; border-bottom: 2px solid #00e5d0; padding-bottom: 8px; }
+    h2 { font-size: 1rem; margin-top: 2rem; color: #555; text-transform: uppercase; letter-spacing: .05em; }
+    .card { border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin: 12px 0; }
+    button { background: #111118; color: #fff; border: none; border-radius: 5px; padding: 8px 14px; cursor: pointer; font-size: .9rem; margin: 4px 4px 4px 0; }
+    button:hover { background: #333; }
+    .result { background: #f4f4f6; border-radius: 5px; padding: 10px 14px; margin-top: 10px; font-family: monospace; font-size: .85rem; min-height: 24px; white-space: pre-wrap; word-break: break-all; }
+    .ok   { color: #16a34a; font-weight: bold; }
+    .err  { color: #dc2626; font-weight: bold; }
+    .dim  { color: #999; }
+    input[type=file] { display: block; margin: 10px 0; }
+    label { font-size: .9rem; color: #555; display: block; margin-bottom: 4px; }
+  </style>
+</head>
+<body>
+
+<h1>Tethernet Tool Tests</h1>
+<p class="dim">Open this page in Chrome with Tethernet connected, then run the test sequences below.</p>
+
+<!-- ── DIALOG TESTS ─────────────────────────────────────────────── -->
+<h2>handle_dialog</h2>
+
+<div class="card">
+  <strong>alert()</strong> — result is always undefined; logged by interceptor
+  <br>
+  <button onclick="triggerAlert()">Trigger alert()</button>
+  <div class="result dim" id="alert-result">not triggered yet</div>
+</div>
+
+<div class="card">
+  <strong>confirm()</strong> — interceptor returns accept value; page sees it as the return
+  <br>
+  <button onclick="triggerConfirm()">Trigger confirm()</button>
+  <div class="result dim" id="confirm-result">not triggered yet</div>
+</div>
+
+<div class="card">
+  <strong>prompt()</strong> — interceptor returns promptText (or default); page sees the value
+  <br>
+  <button onclick="triggerPrompt()">Trigger prompt()</button>
+  <div class="result dim" id="prompt-result">not triggered yet</div>
+</div>
+
+<div class="card">
+  <strong>All three in sequence</strong> — fire alert → confirm → prompt with one click
+  <br>
+  <button onclick="triggerAll()">Trigger all three</button>
+  <div class="result dim" id="all-result">not triggered yet</div>
+</div>
+
+<!-- ── DOWNLOAD TESTS ─────────────────────────────────────────── -->
+<h2>wait_for_download</h2>
+
+<div class="card">
+  <strong>httpbin octet-stream</strong> — <code>application/octet-stream</code> always triggers Chrome's download manager
+  <br>
+  <a id="download-link" href="https://httpbin.org/bytes/2048">Download 2 KB test file</a>
+  <div class="result dim" id="download-result">not triggered</div>
+</div>
+
+<div class="card">
+  <strong>Blob download</strong> — user-gesture click creates a local blob file
+  <br>
+  <button id="blob-download-btn" onclick="downloadBlob()">Download blob (click manually)</button>
+  <div class="result dim" id="blob-result">not triggered</div>
+</div>
+
+<!-- ── FILE UPLOAD TESTS ───────────────────────────────────────── -->
+<h2>upload_file</h2>
+
+<div class="card">
+  <strong>Single file input</strong> — plain text file
+  <label for="file-single">CSS selector: <code>#file-single</code></label>
+  <input type="file" id="file-single">
+  <div class="result dim" id="file-single-result">no file selected</div>
+</div>
+
+<div class="card">
+  <strong>Accept-filtered input</strong> — only CSV
+  <label for="file-csv">CSS selector: <code>#file-csv</code> — accept=".csv"</label>
+  <input type="file" id="file-csv" accept=".csv">
+  <div class="result dim" id="file-csv-result">no file selected</div>
+</div>
+
+<div class="card">
+  <strong>Multiple-file input</strong>
+  <label for="file-multi">CSS selector: <code>#file-multi</code> — multiple</label>
+  <input type="file" id="file-multi" multiple>
+  <div class="result dim" id="file-multi-result">no file selected</div>
+</div>
+
+<script>
+  /* ── Download helpers ── */
+  document.getElementById('download-link').addEventListener('click', () => {
+    document.getElementById('download-result').innerHTML = '<span class="ok">Link clicked — waiting for download...</span>';
+  });
+
+  function downloadBlob() {
+    const content = 'Tethernet wait_for_download blob test\nTimestamp: ' + Date.now();
+    const blob = new Blob([content], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'tethernet-blob-test.txt';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    document.getElementById('blob-result').innerHTML = '<span class="ok">Blob download triggered</span>';
+  }
+
+  /* ── Dialog helpers ── */
+  function triggerAlert() {
+    const msg = 'This is a test alert from Tethernet';
+    alert(msg);
+    document.getElementById('alert-result').innerHTML =
+      `<span class="ok">alert() fired</span> — message: "${msg}"`;
+  }
+
+  function triggerConfirm() {
+    const result = confirm('Do you want to proceed? (interceptor should return accept value)');
+    document.getElementById('confirm-result').innerHTML =
+      `<span class="${result ? 'ok' : 'err'}">confirm() returned: ${result}</span>`;
+  }
+
+  function triggerPrompt() {
+    const result = prompt('Enter your name:', 'Default Value');
+    document.getElementById('prompt-result').innerHTML = result === null
+      ? '<span class="err">prompt() returned: null (dismissed)</span>'
+      : `<span class="ok">prompt() returned: "${result}"</span>`;
+  }
+
+  function triggerAll() {
+    alert('Step 1: alert');
+    const c = confirm('Step 2: confirm — accept?');
+    const p = prompt('Step 3: prompt — enter text:', 'default');
+    document.getElementById('all-result').innerHTML =
+      `alert fired | confirm→${c} | prompt→"${p}"`;
+  }
+
+  /* ── File upload helpers ── */
+  function wireFileInput(inputId, resultId) {
+    document.getElementById(inputId).addEventListener('change', function () {
+      const files = Array.from(this.files);
+      if (!files.length) {
+        document.getElementById(resultId).innerHTML = '<span class="dim">no file selected</span>';
+        return;
+      }
+      const readers = files.map(f => new Promise(resolve => {
+        const r = new FileReader();
+        r.onload = e => resolve({ name: f.name, size: f.size, type: f.type || '(none)', preview: e.target.result });
+        r.readAsText(f);
+      }));
+      Promise.all(readers).then(results => {
+        document.getElementById(resultId).innerHTML = results.map(r =>
+          `<span class="ok">✓</span> <strong>${r.name}</strong> — ${r.size} bytes, type: ${r.type}\n` +
+          `Preview: ${String(r.preview).slice(0, 120)}${r.preview.length > 120 ? '…' : ''}`
+        ).join('\n\n');
+      });
+    });
+  }
+
+  wireFileInput('file-single', 'file-single-result');
+  wireFileInput('file-csv', 'file-csv-result');
+  wireFileInput('file-multi', 'file-multi-result');
+</script>
+
+</body>
+</html>
