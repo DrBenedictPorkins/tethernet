@@ -438,5 +438,39 @@
   );
 
   chrome.runtime.sendMessage({ type: 'content_script_ready' }).catch(() => {});
+
+  // --- Passive interaction tracking ---
+  let passiveActive = false;
+
+  function passiveClickHandler(e) {
+    const el = e.target;
+    const tag = el.tagName ? el.tagName.toLowerCase() : '';
+    const id = el.id ? `#${el.id}` : '';
+    const cls = el.className && typeof el.className === 'string' ? `.${el.className.trim().split(/\s+/)[0]}` : '';
+    chrome.runtime.sendMessage({
+      type: 'passive_interaction',
+      data: { kind: 'interaction', t: Date.now(), action: 'click', el: `${tag}${id}${cls}`, url: location.href },
+    }).catch(() => {});
+  }
+
+  function passiveSubmitHandler() {
+    chrome.runtime.sendMessage({
+      type: 'passive_interaction',
+      data: { kind: 'interaction', t: Date.now(), action: 'submit', url: location.href },
+    }).catch(() => {});
+  }
+
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg.type === 'passive_enable' && !passiveActive) {
+      passiveActive = true;
+      document.addEventListener('click', passiveClickHandler, true);
+      document.addEventListener('submit', passiveSubmitHandler, true);
+    } else if (msg.type === 'passive_disable' && passiveActive) {
+      passiveActive = false;
+      document.removeEventListener('click', passiveClickHandler, true);
+      document.removeEventListener('submit', passiveSubmitHandler, true);
+    }
+  });
+
   console.log('[Tethernet] Content script initialized');
 })();

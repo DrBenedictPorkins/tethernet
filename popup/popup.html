@@ -58,13 +58,6 @@
         <button id="disconnect-btn" class="disconnect-btn hidden">Disconnect</button>
       </div>
 
-      <div class="info-section">
-        <div class="info-row">
-          <span class="info-label">Tabs:</span>
-          <span id="tabs-count" class="info-value">0</span>
-        </div>
-      </div>
-
       <div class="tab-section">
         <div class="tab-header">
           <span class="info-label">Current Tab:</span>
@@ -73,8 +66,6 @@
         <div class="tab-id-row">
           <span class="info-label">Tab ID:</span>
           <span id="tab-id-value" class="tab-id-value">—</span>
-          <span id="primary-tab-marker" class="primary-marker hidden" title="Primary tab">PRIMARY</span>
-          <button id="set-primary-btn" class="set-primary-btn" title="Make this tab the default for all operations">Set Primary</button>
         </div>
         <div id="tab-info" class="tab-info"></div>
         <div id="reload-notice" class="reload-notice hidden">
@@ -83,52 +74,18 @@
         </div>
       </div>
 
-      <div class="capture-section">
-        <div class="capture-header">
-          <span class="info-label">Network Capture</span>
-          <span id="capture-status" class="capture-status idle">IDLE</span>
-        </div>
-        <div id="capture-idle-controls" class="capture-controls">
-          <div class="capture-input-row">
-            <label class="capture-input-label" for="capture-max-entries">Max entries</label>
-            <input type="number" id="capture-max-entries" class="capture-max-input"
-                   min="1" max="500" value="100" />
-          </div>
-          <div class="capture-input-row">
-            <label class="capture-input-label" for="capture-url-filter">URL filter (optional)</label>
-            <input type="text" id="capture-url-filter" class="capture-filter-input"
-                   placeholder="/api/" autocomplete="off" spellcheck="false" />
-          </div>
-          <div class="capture-info-note">
-            Records traffic from the currently active tab only. Switch tabs first if needed.
-          </div>
-          <button id="start-capture-btn" class="start-capture-btn">Start Recording</button>
-        </div>
-        <div id="capture-confirm" class="capture-controls hidden">
-          <div class="capture-confirm-msg">
-            <strong>Only the active tab will be recorded.</strong>
-            <div class="capture-confirm-detail">Tab <span id="confirm-tab-id" class="confirm-tab-id">—</span> will be brought to the front to ensure consistency.</div>
-          </div>
-          <div class="capture-confirm-actions">
-            <button id="cancel-capture-btn" class="cancel-capture-btn">Cancel</button>
-            <button id="confirm-capture-btn" class="confirm-capture-btn">Yes, Record</button>
+      <div class="passive-section">
+        <div class="passive-row">
+          <span class="info-label">Passive Mode</span>
+          <div class="passive-controls">
+            <span id="passive-count" class="passive-count hidden"></span>
+            <label class="toggle">
+              <input type="checkbox" id="passive-toggle" />
+              <span class="toggle-slider"></span>
+            </label>
           </div>
         </div>
-        <div id="capture-active-controls" class="capture-controls hidden">
-          <div class="capture-progress-row">
-            <span class="recording-dot"></span>
-            <span class="recording-label">RECORDING</span>
-            <span id="capture-progress" class="capture-progress">0/100</span>
-          </div>
-          <button id="stop-capture-btn" class="stop-capture-btn">Stop Recording</button>
-        </div>
-        <div id="capture-summary" class="capture-summary hidden">
-          <div id="capture-summary-info" class="capture-summary-info"></div>
-          <div class="capture-summary-actions">
-            <button id="view-capture-btn" class="capture-action-btn">View</button>
-            <button id="clear-capture-btn" class="capture-action-btn capture-clear-btn">Clear</button>
-          </div>
-        </div>
+        <div class="passive-hint">Silently captures API calls and interactions as you browse</div>
       </div>
 
       <div class="consent-granted-section">
@@ -136,9 +93,7 @@
       </div>
     </div>
 
-    <div class="footer">
-      <p>Open <code>chrome://extensions</code> to inspect the extension.</p>
-    </div>
+
   </div>
 
   <script src="popup.js"></script>

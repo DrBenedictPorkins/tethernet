@@ -11,7 +11,6 @@ let sessionInfo = null;
 let consentGranted = false;
 
 const contentScriptTabs = new Set();
-let popupPrimaryTabId = null;
 
 // --- Offscreen document management ---
 
@@ -242,6 +241,17 @@ async function handleServerCommand(action, params) {
     case 'execute_script':
       return handleExecuteScriptViaAPI(params);
 
+    case 'get_outer_html': {
+      const target = { tabId: params.tabId };
+      if (params.frameId) target.frameIds = [params.frameId];
+      const results = await chrome.scripting.executeScript({
+        target,
+        func: () => document.documentElement.outerHTML,
+        world: 'ISOLATED',
+      });
+      return { result: results?.[0]?.result ?? null };
+    }
+
     case 'capture_network':
       return handleCaptureNetwork(params);
 
@@ -259,6 +269,21 @@ async function handleServerCommand(action, params) {
 
     case 'clear_capture':
       return clearCapture();
+
+    case 'get_passive_log': {
+      const { limit, type: typeFilter } = params || {};
+      let entries = passiveLog;
+      if (typeFilter === 'net') entries = entries.filter(e => !e.kind);
+      else if (typeFilter === 'interaction') entries = entries.filter(e => e.kind === 'interaction');
+      if (limit) entries = entries.slice(-limit);
+      return { enabled: passiveMode, count: passiveLog.length, entries };
+    }
+
+    case 'clear_passive_log':
+      passiveLog = [];
+      passivePending.clear();
+      chrome.runtime.sendMessage({ type: 'passive_count_changed', count: 0 }).catch(() => {});
+      return { cleared: true };
 
     case 'click_element':
     case 'type_text':
@@ -298,6 +323,21 @@ async function handleServerCommand(action, params) {
 
     case 'get_window_bounds':
       return handleGetWindowBounds(params);
+
+    case 'wait_for_download':
+      return handleWaitForDownload(params);
+
+    case 'fetch_with_session':
+      return handleFetchWithSession(params);
+
+    case 'handle_dialog':
+      return handleDialog(params);
+
+    case 'upload_file':
+      return handleUploadFile(params);
+
+    case 'run_lighthouse':
+      return handleRunLighthouse(params);
 
     default:
       throw new Error(`Unknown action: ${action}`);
@@ -568,6 +608,9 @@ async function handleExecuteScriptViaAPI(params) {
 // webRequest handles headers/timing/request-bodies (always-on listeners).
 // chrome.debugger handles response bodies (attached only during active capture).
 
+const DL_SESSION_KEY = '__tethernet_dl_tracker__';
+const DL_SESSION_TTL = 30000;
+
 const HARD_CEILING_MS = 5 * 60 * 1000;
 const HEADER_VALUE_LIMIT = 1024;
 const MAX_ENTRIES_HARD_CAP = 500;
@@ -588,6 +631,70 @@ const networkCapture = {
   ceilingTimer: null,
   debuggerAttached: false,
 };
+
+// --- Passive mode ---
+const PASSIVE_MAX = 500;
+let passiveMode = false;
+let passiveLog = [];
+const passivePending = new Map();
+
+function passiveBeforeRequest(details) {
+  if (details.tabId < 0) return;
+  passivePending.set(details.requestId, {
+    url: details.url,
+    method: details.method,
+    tabId: details.tabId,
+    t: details.timeStamp,
+  });
+}
+
+function passiveOnCompleted(details) {
+  const p = passivePending.get(details.requestId);
+  if (!p) return;
+  passivePending.delete(details.requestId);
+  passiveLog.push({
+    t: details.timeStamp,
+    method: p.method,
+    url: p.url,
+    status: details.statusCode,
+    type: details.type,
+    ms: Math.round(details.timeStamp - p.t),
+    tabId: p.tabId,
+  });
+  if (passiveLog.length > PASSIVE_MAX) passiveLog.shift();
+  chrome.runtime.sendMessage({ type: 'passive_count_changed', count: passiveLog.length }).catch(() => {});
+}
+
+function passiveOnError(details) {
+  passivePending.delete(details.requestId);
+}
+
+function setPassiveMode(enabled) {
+  passiveMode = enabled;
+  chrome.storage.local.set({ tethernetPassiveMode: enabled });
+  if (enabled) {
+    chrome.webRequest.onBeforeRequest.addListener(passiveBeforeRequest, { urls: ['<all_urls>'] });
+    chrome.webRequest.onCompleted.addListener(passiveOnCompleted, { urls: ['<all_urls>'] }, ['responseHeaders']);
+    chrome.webRequest.onErrorOccurred.addListener(passiveOnError, { urls: ['<all_urls>'] });
+    chrome.tabs.query({}, (tabs) => {
+      tabs.forEach(tab => {
+        chrome.tabs.sendMessage(tab.id, { type: 'passive_enable' }).catch(() => {});
+      });
+    });
+  } else {
+    try { chrome.webRequest.onBeforeRequest.removeListener(passiveBeforeRequest); } catch (_) {}
+    try { chrome.webRequest.onCompleted.removeListener(passiveOnCompleted); } catch (_) {}
+    try { chrome.webRequest.onErrorOccurred.removeListener(passiveOnError); } catch (_) {}
+    passivePending.clear();
+    passiveLog = [];
+    chrome.tabs.query({}, (tabs) => {
+      tabs.forEach(tab => {
+        chrome.tabs.sendMessage(tab.id, { type: 'passive_disable' }).catch(() => {});
+      });
+    });
+    chrome.runtime.sendMessage({ type: 'passive_count_changed', count: 0 }).catch(() => {});
+  }
+}
 
 // CDP request tracking: CDP requestId → { url }
 const debuggerState = {
@@ -1052,6 +1159,526 @@ async function handleCaptureNetwork(params) {
   };
 }
 
+async function handleWaitForDownload(params) {
+  const { timeout = 30000, urlPattern = '' } = params;
+
+  // Grace window: check the persistent download tracker in chrome.storage.session first.
+  // The top-level chrome.downloads.onCreated/onChanged listeners (registered at SW startup)
+  // record every download into session storage, surviving SW restarts within a browser session.
+  // This handles fast downloads that complete before wait_for_download is called.
+  const graceMs = 15000;
+  const graceCutoff = Date.now() - graceMs;
+
+  const sessionData = await new Promise(resolve => chrome.storage.session.get(DL_SESSION_KEY, resolve));
+  const trackedEntries = (sessionData[DL_SESSION_KEY] || [])
+    .filter(e => e.recordedAt >= graceCutoff)
+    .filter(e => !urlPattern || e.url.includes(urlPattern));
+
+  const alreadyDone = trackedEntries.find(e => e.state === 'complete' || e.state === 'interrupted');
+  if (alreadyDone) {
+    return {
+      id: alreadyDone.id,
+      filename: alreadyDone.filename,
+      url: alreadyDone.url,
+      finalUrl: alreadyDone.finalUrl || alreadyDone.url,
+      state: alreadyDone.state,
+      fileSize: alreadyDone.fileSize || 0,
+      totalBytes: alreadyDone.totalBytes || 0,
+      mime: alreadyDone.mime || null,
+      startTime: alreadyDone.startTime || null,
+      endTime: alreadyDone.endTime || null,
+      error: alreadyDone.error || null,
+      fromGraceWindow: true,
+    };
+  }
+
+  // Also check for in-progress downloads tracked in the session store
+  const inProgressTracked = trackedEntries.filter(e => e.state === 'in_progress').map(e => e.id);
+
+  // Fallback: also query chrome.downloads directly for any in-progress downloads
+  const liveInProgress = await new Promise(resolve => chrome.downloads.search({ state: 'in_progress' }, resolve));
+  const liveFiltered = liveInProgress.filter(d => !urlPattern || d.url.includes(urlPattern));
+
+  const pendingIds = new Set([
+    ...inProgressTracked,
+    ...liveFiltered.map(d => d.id),
+  ]);
+
+  return new Promise((resolve, reject) => {
+    const deadline = setTimeout(() => {
+      chrome.downloads.onCreated.removeListener(onCreated);
+      chrome.downloads.onChanged.removeListener(onChanged);
+      reject(new Error(`Timeout: no download completed within ${timeout}ms`));
+    }, timeout);
+
+    function format(item) {
+      return {
+        id: item.id,
+        filename: item.filename,
+        url: item.url,
+        finalUrl: item.finalUrl || item.url,
+        state: item.state,
+        fileSize: item.fileSize || item.bytesReceived || 0,
+        totalBytes: item.totalBytes || 0,
+        mime: item.mime || null,
+        startTime: item.startTime || null,
+        endTime: item.endTime || null,
+        error: item.error || null,
+      };
+    }
+
+    function finish(id) {
+      clearTimeout(deadline);
+      chrome.downloads.onCreated.removeListener(onCreated);
+      chrome.downloads.onChanged.removeListener(onChanged);
+      chrome.downloads.search({ id }, (items) => {
+        if (items.length > 0) resolve(format(items[0]));
+        else reject(new Error(`Download ${id} not found after completion`));
+      });
+    }
+
+    function onCreated(item) {
+      if (urlPattern && !item.url.includes(urlPattern)) return;
+      if (item.state === 'complete') { finish(item.id); return; }
+      pendingIds.add(item.id);
+    }
+
+    function onChanged(delta) {
+      if (!pendingIds.has(delta.id)) return;
+      if (!delta.state) return;
+      if (delta.state.current === 'complete') {
+        pendingIds.delete(delta.id);
+        finish(delta.id);
+      } else if (delta.state.current === 'interrupted') {
+        pendingIds.delete(delta.id);
+        clearTimeout(deadline);
+        chrome.downloads.onCreated.removeListener(onCreated);
+        chrome.downloads.onChanged.removeListener(onChanged);
+        resolve({ id: delta.id, state: 'interrupted', error: delta.error?.current || 'UNKNOWN' });
+      }
+    }
+
+    chrome.downloads.onCreated.addListener(onCreated);
+    chrome.downloads.onChanged.addListener(onChanged);
+  });
+}
+
+async function handleFetchWithSession(params) {
+  const { tabId, url, method = 'GET', headers = {}, body = null, timeout = 30000, maxBodySize = 50000 } = params;
+  const BODY_LIMIT = Math.min(maxBodySize, 200000);
+
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: async (fetchUrl, fetchMethod, fetchHeaders, fetchBody, fetchTimeout, bodyLimit) => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), fetchTimeout);
+      try {
+        const init = { method: fetchMethod, headers: fetchHeaders, credentials: 'include', signal: controller.signal };
+        if (fetchBody !== null && fetchMethod !== 'GET' && fetchMethod !== 'HEAD') {
+          init.body = typeof fetchBody === 'string' ? fetchBody : JSON.stringify(fetchBody);
+        }
+        const resp = await fetch(fetchUrl, init);
+        clearTimeout(timer);
+        const responseHeaders = {};
+        resp.headers.forEach((v, k) => { responseHeaders[k] = v; });
+        const contentType = resp.headers.get('content-type') || '';
+        let responseBody, bodyType = 'text';
+        const text = await resp.text();
+        const truncated = text.length > bodyLimit;
+        const sample = truncated ? text.slice(0, bodyLimit) : text;
+        if (contentType.includes('application/json')) {
+          try { responseBody = JSON.parse(sample); bodyType = 'json'; }
+          catch { responseBody = sample; }
+        } else {
+          responseBody = sample;
+        }
+        return {
+          status: resp.status,
+          statusText: resp.statusText,
+          ok: resp.ok,
+          url: resp.url,
+          headers: responseHeaders,
+          body: responseBody,
+          bodyType,
+          truncated,
+          totalBodySize: text.length,
+        };
+      } catch (e) {
+        clearTimeout(timer);
+        return { error: e.name === 'AbortError' ? `Request timed out after ${fetchTimeout}ms` : e.message };
+      }
+    },
+    args: [url, method, headers, body, timeout, BODY_LIMIT],
+    world: 'MAIN',
+  });
+
+  const result = results?.[0]?.result;
+  if (!result) return { error: 'Script execution returned no result (tab may not have a loaded page)' };
+  return result;
+}
+
+async function handleDialog(params) {
+  const { tabId, accept = true, promptText = '', drain = false } = params;
+
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: (acceptVal, promptTextVal, drainOnly) => {
+      window.__tethernetDialogLog = window.__tethernetDialogLog || [];
+
+      if (drainOnly) {
+        const logged = window.__tethernetDialogLog.splice(0);
+        return { drained: true, dialogs: logged };
+      }
+
+      // Save originals once so we can always restore
+      if (!window.__tethernetDialogOriginals) {
+        window.__tethernetDialogOriginals = {
+          alert: window.alert,
+          confirm: window.confirm,
+          prompt: window.prompt,
+        };
+      }
+
+      window.alert = function(msg) {
+        window.__tethernetDialogLog.push({ type: 'alert', message: String(msg ?? ''), at: Date.now() });
+      };
+      window.confirm = function(msg) {
+        const result = acceptVal;
+        window.__tethernetDialogLog.push({ type: 'confirm', message: String(msg ?? ''), result, at: Date.now() });
+        return result;
+      };
+      window.prompt = function(msg, defaultValue) {
+        const result = acceptVal ? (promptTextVal || defaultValue || '') : null;
+        window.__tethernetDialogLog.push({ type: 'prompt', message: String(msg ?? ''), defaultValue, result, at: Date.now() });
+        return result;
+      };
+
+      const pending = window.__tethernetDialogLog.splice(0);
+      return { installed: true, accept: acceptVal, promptText: promptTextVal, pendingDialogs: pending };
+    },
+    args: [accept, promptText, drain],
+    world: 'MAIN',
+  });
+
+  return results?.[0]?.result ?? { error: 'Script returned no result' };
+}
+
+async function handleUploadFile(params) {
+  const { tabId, frameId, selector, filename, content, mimeType = '', encoding = 'text' } = params;
+
+  const target = { tabId };
+  if (frameId != null) target.frameIds = [frameId];
+
+  const results = await chrome.scripting.executeScript({
+    target,
+    func: (sel, fname, fileContent, fileMime, enc) => {
+      const el = document.querySelector(sel);
+      if (!el) return { error: `No element found: ${sel}` };
+      if (el.tagName !== 'INPUT' || el.type !== 'file') {
+        return { error: `Element is not a file input (got <${el.tagName.toLowerCase()} type="${el.type}">): ${sel}` };
+      }
+
+      let bytes;
+      try {
+        if (enc === 'base64') {
+          const binary = atob(fileContent);
+          bytes = new Uint8Array(binary.length);
+          for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        } else {
+          bytes = new TextEncoder().encode(fileContent);
+        }
+      } catch (e) {
+        return { error: `Failed to decode content: ${e.message}` };
+      }
+
+      const file = new File([bytes], fname, { type: fileMime || '' });
+      const dt = new DataTransfer();
+      dt.items.add(file);
+
+      try {
+        el.files = dt.files;
+      } catch (e) {
+        return { error: `Could not set files on input: ${e.message}` };
+      }
+
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+
+      return { uploaded: true, filename: file.name, size: file.size, type: file.type };
+    },
+    args: [selector, filename, content, mimeType, encoding],
+    world: 'MAIN',
+  });
+
+  return results?.[0]?.result ?? { error: 'Script returned no result' };
+}
+
+async function handleRunLighthouse(params) {
+  const { tabId, categories = ['performance', 'accessibility', 'seo', 'best-practices'] } = params;
+
+  if (networkCapture.debuggerAttached && networkCapture.tabId === tabId) {
+    return { error: 'Network capture is active on this tab — call stop_network_capture first.' };
+  }
+
+  let tab;
+  try {
+    tab = await chrome.tabs.get(tabId);
+  } catch (e) {
+    return { error: `Tab ${tabId} not found` };
+  }
+
+  let debuggerAttached = false;
+  try {
+    await chrome.debugger.attach({ tabId }, '1.3');
+    debuggerAttached = true;
+  } catch (e) {
+    return { error: `Could not attach debugger: ${e.message}. Close DevTools on this tab and try again.` };
+  }
+
+  const audit = { url: tab.url, categories: {} };
+
+  try {
+    // ── PERFORMANCE ──────────────────────────────────────────────
+    if (categories.includes('performance')) {
+      await chrome.debugger.sendCommand({ tabId }, 'Performance.enable');
+      const { metrics } = await chrome.debugger.sendCommand({ tabId }, 'Performance.getMetrics');
+      const cdp = Object.fromEntries(metrics.map(m => [m.name, m.value]));
+
+      const cwvResult = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: () => {
+          const nav = performance.getEntriesByType('navigation')[0] || {};
+          const fcp = performance.getEntriesByType('paint').find(e => e.name === 'first-contentful-paint')?.startTime ?? null;
+
+          let lcp = null;
+          try {
+            const obs = new PerformanceObserver(() => {});
+            obs.observe({ type: 'largest-contentful-paint', buffered: true });
+            const entries = obs.takeRecords();
+            lcp = entries.length ? entries[entries.length - 1].startTime : null;
+            obs.disconnect();
+          } catch (_) {}
+
+          let cls = 0;
+          try {
+            const obs = new PerformanceObserver(() => {});
+            obs.observe({ type: 'layout-shift', buffered: true });
+            for (const e of obs.takeRecords()) { if (!e.hadRecentInput) cls += e.value; }
+            obs.disconnect();
+          } catch (_) {}
+
+          return {
+            fcp: fcp != null ? Math.round(fcp) : null,
+            lcp: lcp != null ? Math.round(lcp) : null,
+            cls: Math.round(cls * 1000) / 1000,
+            ttfb: nav.responseStart ? Math.round(nav.responseStart - nav.requestStart) : null,
+            domContentLoaded: nav.domContentLoadedEventEnd ? Math.round(nav.domContentLoadedEventEnd) : null,
+            loadTime: nav.loadEventEnd ? Math.round(nav.loadEventEnd) : null,
+          };
+        },
+        world: 'MAIN',
+      });
+      const cwv = cwvResult?.[0]?.result ?? {};
+
+      function scoreMetric(v, good, poor) {
+        if (v == null) return null;
+        if (v <= good) return 100;
+        if (v >= poor) return 0;
+        return Math.round(100 * (1 - (v - good) / (poor - good)));
+      }
+      function rating(s) { return s == null ? null : s >= 90 ? 'good' : s >= 50 ? 'needs-improvement' : 'poor'; }
+
+      const scores = {
+        fcp: scoreMetric(cwv.fcp, 1800, 3000),
+        lcp: scoreMetric(cwv.lcp, 2500, 4000),
+        cls: scoreMetric(cwv.cls, 0.1, 0.25),
+        ttfb: scoreMetric(cwv.ttfb, 800, 1800),
+      };
+      const validScores = Object.values(scores).filter(s => s != null);
+
+      audit.categories.performance = {
+        score: validScores.length ? Math.round(validScores.reduce((a, b) => a + b, 0) / validScores.length) : null,
+        metrics: {
+          fcp:  { value: cwv.fcp,  unit: 'ms', score: scores.fcp,  rating: rating(scores.fcp) },
+          lcp:  { value: cwv.lcp,  unit: 'ms', score: scores.lcp,  rating: rating(scores.lcp) },
+          cls:  { value: cwv.cls,  unit: '',   score: scores.cls,  rating: rating(scores.cls) },
+          ttfb: { value: cwv.ttfb, unit: 'ms', score: scores.ttfb, rating: rating(scores.ttfb) },
+          domContentLoaded: { value: cwv.domContentLoaded, unit: 'ms' },
+          loadTime:         { value: cwv.loadTime,         unit: 'ms' },
+        },
+        cdpMetrics: {
+          scriptDuration: cdp.ScriptDuration != null ? Math.round(cdp.ScriptDuration * 1000) : null,
+          taskDuration:   cdp.TaskDuration   != null ? Math.round(cdp.TaskDuration   * 1000) : null,
+          jsHeapUsedKB:   cdp.JSHeapUsedSize != null ? Math.round(cdp.JSHeapUsedSize / 1024) : null,
+          domNodes:       cdp.Nodes          != null ? cdp.Nodes      : null,
+          layoutCount:    cdp.LayoutCount    != null ? cdp.LayoutCount : null,
+        },
+      };
+    }
+
+    // ── ACCESSIBILITY ─────────────────────────────────────────────
+    if (categories.includes('accessibility')) {
+      const result = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: () => {
+          const issues = [];
+
+          const imgsNoAlt = document.querySelectorAll('img:not([alt])').length;
+          if (imgsNoAlt) issues.push({ id: 'image-alt', impact: 'critical', count: imgsNoAlt, description: `${imgsNoAlt} image(s) missing alt attribute` });
+
+          const inputs = Array.from(document.querySelectorAll(
+            'input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=reset]):not([type=image]), select, textarea'
+          ));
+          const unlabeled = inputs.filter(el =>
+            !el.getAttribute('aria-label') &&
+            !el.getAttribute('aria-labelledby') &&
+            !(el.id && document.querySelector(`label[for="${CSS.escape(el.id)}"]`)) &&
+            !el.closest('label') &&
+            !el.getAttribute('title')
+          ).length;
+          if (unlabeled) issues.push({ id: 'label', impact: 'critical', count: unlabeled, description: `${unlabeled} form input(s) without accessible labels` });
+
+          const btns = Array.from(document.querySelectorAll('button, [role=button], input[type=button], input[type=submit]'));
+          const unnamedBtns = btns.filter(el =>
+            !(el.textContent || '').trim() &&
+            !el.getAttribute('aria-label') &&
+            !el.getAttribute('aria-labelledby') &&
+            !el.getAttribute('title') &&
+            !el.querySelector('img[alt]')
+          ).length;
+          if (unnamedBtns) issues.push({ id: 'button-name', impact: 'critical', count: unnamedBtns, description: `${unnamedBtns} button(s) without accessible names` });
+
+          if (!document.documentElement.getAttribute('lang'))
+            issues.push({ id: 'html-has-lang', impact: 'serious', count: 1, description: 'Document missing lang attribute on <html>' });
+
+          const h1Count = document.querySelectorAll('h1').length;
+          if (h1Count > 1) issues.push({ id: 'multiple-h1', impact: 'moderate', count: h1Count, description: `${h1Count} <h1> elements — should have exactly one` });
+          if (h1Count === 0) issues.push({ id: 'missing-h1', impact: 'moderate', count: 1, description: 'No <h1> found on page' });
+
+          const emptyLinks = Array.from(document.querySelectorAll('a[href]')).filter(a =>
+            !(a.textContent || '').trim() && !a.getAttribute('aria-label') && !a.querySelector('img[alt]')
+          ).length;
+          if (emptyLinks) issues.push({ id: 'link-name', impact: 'serious', count: emptyLinks, description: `${emptyLinks} link(s) without accessible names` });
+
+          const weights = { critical: 10, serious: 5, moderate: 2, minor: 1 };
+          const deduction = issues.reduce((sum, i) => sum + (weights[i.impact] || 2) * Math.min(i.count, 5), 0);
+
+          return {
+            score: Math.max(0, 100 - deduction),
+            issues,
+            totals: {
+              images: document.querySelectorAll('img').length,
+              inputs: inputs.length,
+              buttons: btns.length,
+              links: document.querySelectorAll('a[href]').length,
+            },
+          };
+        },
+        world: 'MAIN',
+      });
+      audit.categories.accessibility = result?.[0]?.result ?? { error: 'Script failed' };
+    }
+
+    // ── SEO ───────────────────────────────────────────────────────
+    if (categories.includes('seo')) {
+      const result = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: () => {
+          const getMeta = name =>
+            document.querySelector(`meta[name="${name}"]`)?.content ??
+            document.querySelector(`meta[property="${name}"]`)?.content ?? null;
+
+          const checks = [];
+
+          const title = document.title;
+          const titleLen = title?.length ?? 0;
+          checks.push({ id: 'document-title', pass: titleLen >= 10 && titleLen <= 60, score: !title ? 0 : (titleLen >= 10 && titleLen <= 60) ? 100 : 50, description: !title ? 'Missing <title>' : `Title: "${title}" (${titleLen} chars${titleLen < 10 || titleLen > 60 ? ' — optimal: 10-60' : ''})` });
+
+          const desc = getMeta('description');
+          const descLen = desc?.length ?? 0;
+          checks.push({ id: 'meta-description', pass: descLen >= 50 && descLen <= 160, score: !desc ? 0 : (descLen >= 50 && descLen <= 160) ? 100 : 50, description: !desc ? 'Missing meta description' : `Meta description: ${descLen} chars${descLen < 50 || descLen > 160 ? ' — optimal: 50-160' : ''}` });
+
+          const h1s = Array.from(document.querySelectorAll('h1')).map(h => h.textContent.trim().slice(0, 80));
+          checks.push({ id: 'single-h1', pass: h1s.length === 1, score: h1s.length === 1 ? 100 : 0, description: h1s.length === 0 ? 'No <h1> found' : h1s.length > 1 ? `${h1s.length} <h1> elements` : `H1: "${h1s[0]}"` });
+
+          const viewport = document.querySelector('meta[name="viewport"]');
+          checks.push({ id: 'viewport', pass: !!viewport, score: viewport ? 100 : 0, description: viewport ? `Viewport: ${viewport.content}` : 'Missing viewport meta tag' });
+
+          const canonical = document.querySelector('link[rel="canonical"]')?.href;
+          checks.push({ id: 'canonical', pass: !!canonical, score: canonical ? 100 : 50, description: canonical ? `Canonical: ${canonical}` : 'No canonical URL set' });
+
+          const robots = getMeta('robots');
+          const blocking = robots && (robots.includes('noindex') || robots.includes('none'));
+          checks.push({ id: 'robots-txt', pass: !blocking, score: blocking ? 0 : 100, description: blocking ? `Robots meta blocks indexing: "${robots}"` : robots ? `Robots: "${robots}"` : 'No robots meta (defaults to index, follow)' });
+
+          const imgsNoAlt = document.querySelectorAll('img:not([alt])').length;
+          checks.push({ id: 'image-alt', pass: imgsNoAlt === 0, score: Math.max(0, 100 - imgsNoAlt * 10), description: imgsNoAlt === 0 ? 'All images have alt attributes' : `${imgsNoAlt} image(s) missing alt` });
+
+          const jsonLd = Array.from(document.querySelectorAll('script[type="application/ld+json"]'))
+            .map(s => { try { return JSON.parse(s.textContent); } catch (_) { return null; } })
+            .filter(Boolean);
+          checks.push({ id: 'structured-data', pass: jsonLd.length > 0, score: jsonLd.length > 0 ? 100 : 50, description: jsonLd.length ? `Structured data: ${jsonLd.map(d => d['@type']).filter(Boolean).join(', ')}` : 'No JSON-LD structured data' });
+
+          return {
+            score: Math.round(checks.reduce((s, c) => s + c.score, 0) / checks.length),
+            passed: checks.filter(c => c.pass).length,
+            total: checks.length,
+            checks,
+          };
+        },
+        world: 'MAIN',
+      });
+      audit.categories.seo = result?.[0]?.result ?? { error: 'Script failed' };
+    }
+
+    // ── BEST PRACTICES ────────────────────────────────────────────
+    if (categories.includes('best-practices')) {
+      const result = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: (url) => {
+          const checks = [];
+
+          checks.push({ id: 'https', pass: url.startsWith('https://'), description: url.startsWith('https://') ? 'Served over HTTPS' : 'Not served over HTTPS' });
+
+          checks.push({ id: 'doctype', pass: document.doctype?.name === 'html', description: document.doctype?.name === 'html' ? 'Valid HTML5 doctype' : 'Missing or invalid doctype' });
+
+          const charset = (document.characterSet || '').toLowerCase();
+          checks.push({ id: 'charset', pass: charset === 'utf-8', description: charset === 'utf-8' ? 'UTF-8 charset' : `Charset: ${charset || 'not declared'}` });
+
+          const unsized = Array.from(document.querySelectorAll('img'))
+            .filter(img => !img.getAttribute('width') || !img.getAttribute('height')).length;
+          checks.push({ id: 'image-dimensions', pass: unsized === 0, description: unsized === 0 ? 'All images have explicit dimensions' : `${unsized} image(s) missing explicit width/height (layout shift risk)` });
+
+          const passwordInputs = document.querySelectorAll('input[type=password]').length;
+          if (passwordInputs > 0) {
+            const insecure = !url.startsWith('https://');
+            checks.push({ id: 'password-over-https', pass: !insecure, description: insecure ? 'Password input on non-HTTPS page — credentials at risk' : 'Password input served over HTTPS' });
+          }
+
+          const externalScripts = Array.from(document.querySelectorAll('script[src]'))
+            .filter(s => { try { return new URL(s.src).origin !== location.origin; } catch(_) { return false; } }).length;
+          checks.push({ id: 'external-scripts', pass: true, description: `${externalScripts} external script(s) loaded` });
+
+          const passed = checks.filter(c => c.pass).length;
+          return { score: Math.round(100 * passed / checks.length), passed, total: checks.length, checks };
+        },
+        args: [tab.url],
+        world: 'MAIN',
+      });
+      audit.categories['best-practices'] = result?.[0]?.result ?? { error: 'Script failed' };
+    }
+
+  } finally {
+    if (debuggerAttached) {
+      try { await chrome.debugger.detach({ tabId }); } catch (_) {}
+    }
+  }
+
+  const scores = Object.values(audit.categories).map(c => c.score).filter(s => typeof s === 'number');
+  audit.overallScore = scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : null;
+  return audit;
+}
+
 async function forwardToContentScript(tabId, action, params) {
   try {
     const frameId = params.frameId ?? 0;
@@ -1197,36 +1824,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
 
-  if (message.type === 'popup_start_capture') {
-    startCapture(message.params || {}).then(sendResponse);
-    return true;
-  }
-
-  if (message.type === 'popup_stop_capture') {
-    stopCapture('manual').then(sendResponse);
-    return true;
-  }
-
-  if (message.type === 'popup_get_capture') {
-    sendResponse({ capture: getCurrentCapture(), state: getCaptureState() });
+  if (message.type === 'popup_set_passive_mode') {
+    setPassiveMode(!!message.enabled);
+    sendResponse({ ok: true, enabled: passiveMode });
     return false;
   }
 
-  if (message.type === 'popup_clear_capture') {
-    sendResponse(clearCapture());
+  if (message.type === 'popup_get_passive_mode') {
+    sendResponse({ enabled: passiveMode, count: passiveLog.length });
     return false;
   }
 
-  if (message.type === 'popup_set_primary_tab') {
-    const tabId = message.tabId != null ? Number(message.tabId) : null;
-    popupPrimaryTabId = tabId;
-    sendToServer({ type: 'primary_tab_changed', data: { tabId } });
-    sendResponse({ ok: true, primaryTabId: tabId });
-    return false;
-  }
-
-  if (message.type === 'popup_get_primary_tab') {
-    sendResponse({ primaryTabId: popupPrimaryTabId });
+  if (message.type === 'passive_interaction') {
+    if (passiveMode && message.data) {
+      passiveLog.push({ kind: 'interaction', ...message.data });
+      if (passiveLog.length > PASSIVE_MAX) passiveLog.shift();
+      chrome.runtime.sendMessage({ type: 'passive_count_changed', count: passiveLog.length }).catch(() => {});
+    }
     return false;
   }
 });
@@ -1239,15 +1853,56 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   if (networkCapture.active && networkCapture.tabId === tabId) {
     stopCapture('tab_closed');
   }
-
-  if (popupPrimaryTabId === tabId) {
-    popupPrimaryTabId = null;
-    sendToServer({ type: 'primary_tab_changed', data: { tabId: null } });
-  }
 });
 
 chrome.tabs.onActivated.addListener((activeInfo) => {
   checkContentScript(activeInfo.tabId);
+});
+
+// --- Persistent download tracker ---
+// Top-level listeners wake the SW on every download event and record entries in
+// chrome.storage.session so wait_for_download can read them across SW restarts.
+// chrome.storage.session is cleared when the browser profile session ends.
+
+function pruneDownloadTracker(entries) {
+  const cutoff = Date.now() - DL_SESSION_TTL;
+  return entries.filter(e => e.recordedAt >= cutoff);
+}
+
+chrome.downloads.onCreated.addListener((item) => {
+  console.log('[Tethernet] download created:', item.id, item.url, item.state);
+  chrome.storage.session.get(DL_SESSION_KEY, (result) => {
+    const entries = pruneDownloadTracker(result[DL_SESSION_KEY] || []);
+    entries.push({ id: item.id, url: item.url, finalUrl: item.finalUrl || item.url, state: item.state, mime: item.mime || null, startTime: item.startTime, endTime: item.endTime || null, filename: item.filename || '', totalBytes: item.totalBytes || 0, fileSize: item.fileSize || item.bytesReceived || 0, error: item.error || null, recordedAt: Date.now() });
+    chrome.storage.session.set({ [DL_SESSION_KEY]: entries });
+  });
+});
+
+chrome.downloads.onChanged.addListener((delta) => {
+  if (!delta.state) return;
+  chrome.storage.session.get(DL_SESSION_KEY, (result) => {
+    const entries = result[DL_SESSION_KEY] || [];
+    const idx = entries.findIndex(e => e.id === delta.id);
+    if (idx === -1) {
+      // Not yet tracked — fetch the full item and add it
+      chrome.downloads.search({ id: delta.id }, (items) => {
+        if (!items || !items.length) return;
+        const item = items[0];
+        const pruned = pruneDownloadTracker(entries);
+        pruned.push({ id: item.id, url: item.url, finalUrl: item.finalUrl || item.url, state: item.state, mime: item.mime || null, startTime: item.startTime, endTime: item.endTime || null, filename: item.filename || '', totalBytes: item.totalBytes || 0, fileSize: item.fileSize || item.bytesReceived || 0, error: item.error || null, recordedAt: Date.now() });
+        chrome.storage.session.set({ [DL_SESSION_KEY]: pruned });
+      });
+      return;
+    }
+    if (delta.state) entries[idx].state = delta.state.current;
+    if (delta.endTime) entries[idx].endTime = delta.endTime.current;
+    if (delta.error) entries[idx].error = delta.error.current;
+    if (delta.filename) entries[idx].filename = delta.filename.current;
+    if (delta.fileSize) entries[idx].fileSize = delta.fileSize.current;
+    if (delta.totalBytes) entries[idx].totalBytes = delta.totalBytes.current;
+    entries[idx].recordedAt = Date.now();
+    chrome.storage.session.set({ [DL_SESSION_KEY]: pruneDownloadTracker(entries) });
+  });
 });
 
 // --- Init ---
@@ -1258,9 +1913,13 @@ updateIcon();
 updateRecordingIndicator();
 buildRecordingIconCache();
 
-chrome.storage.local.get('tetherwebConsent').then(({ tetherwebConsent }) => {
+chrome.storage.local.get(['tetherwebConsent', 'tethernetPassiveMode']).then(({ tetherwebConsent, tethernetPassiveMode }) => {
   consentGranted = !!tetherwebConsent;
   console.log(`[Tethernet] Consent: ${consentGranted ? 'granted' : 'not granted'}`);
+  if (tethernetPassiveMode) {
+    setPassiveMode(true);
+    console.log('[Tethernet] Passive mode restored from storage');
+  }
 });
 
 chrome.storage.onChanged.addListener((changes, area) => {
