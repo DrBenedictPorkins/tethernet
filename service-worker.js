@@ -285,60 +285,65 @@ async function handleServerCommand(action, params) {
       chrome.runtime.sendMessage({ type: 'passive_count_changed', count: 0 }).catch(() => {});
       return { cleared: true };
 
-    case 'summarize_passive_log': {
-      if (!passiveLog.length) return { enabled: passiveMode, count: 0, summary: null };
+    case 'summarize_passive_log':
+      return buildPassiveSummary();
 
+    case 'find_beacons': {
+      const BEACON_VENDORS = [
+        { vendor: 'Video Analytics', pattern: '/va/api/' },
+        { vendor: 'Streaming Beacon', pattern: '/streamer/' },
+        { vendor: 'Conviva', pattern: 'cws.conviva.com' },
+        { vendor: 'Nielsen DCR', pattern: 'imrworldwide.com' },
+        { vendor: 'Comscore', pattern: 'scorecardresearch.com' },
+        { vendor: 'New Relic', pattern: 'nr-data.net' },
+        { vendor: 'Google Analytics', pattern: 'google-analytics.com' },
+        { vendor: 'Google Analytics 4', pattern: 'analytics.google.com' },
+        { vendor: 'Segment', pattern: 'segment.io' },
+        { vendor: 'Segment', pattern: 'segment.com' },
+        { vendor: 'Amplitude', pattern: 'amplitude.com' },
+        { vendor: 'Mixpanel', pattern: 'mixpanel.com' },
+        { vendor: 'Heap', pattern: 'heapanalytics.com' },
+        { vendor: 'FullStory', pattern: 'fullstory.com' },
+        { vendor: 'Hotjar', pattern: 'hotjar.com' },
+        { vendor: 'Google Ads', pattern: 'doubleclick.net' },
+        { vendor: 'Google Ads', pattern: 'googlesyndication.com' },
+        { vendor: 'Facebook Pixel', pattern: 'facebook.com/tr' },
+        { vendor: 'Microsoft UET', pattern: 'bat.bing.com' },
+        { vendor: 'LinkedIn', pattern: 'snap.licdn.com' },
+        { vendor: 'LinkedIn', pattern: 'linkedin.com/px' },
+        { vendor: 'Twitter/X Ads', pattern: 'ads-twitter.com' },
+        { vendor: 'Twitter/X Ads', pattern: 'twitter.com/i/adsct' },
+        { vendor: 'TikTok Pixel', pattern: 'tiktok.com' },
+        { vendor: 'Adobe Analytics', pattern: 'omtrdc.net' },
+        { vendor: 'Adobe Analytics', pattern: '2o7.net' },
+        { vendor: 'Adobe Launch', pattern: 'adobedtm.com' },
+        { vendor: 'Chartbeat', pattern: 'chartbeat.com' },
+        { vendor: 'Quantcast', pattern: 'quantserve.com' },
+        { vendor: 'Taboola', pattern: 'taboola.com' },
+        { vendor: 'Outbrain', pattern: 'outbrain.com' },
+        { vendor: 'Criteo', pattern: 'criteo.com' },
+        { vendor: 'Sentry', pattern: 'sentry.io' },
+        { vendor: 'Datadog', pattern: 'datadoghq.com' },
+        { vendor: 'FreeWheel', pattern: 'fwmrm.net' },
+        { vendor: 'FreeWheel', pattern: 'freewheel.tv' },
+        { vendor: 'SpotX', pattern: 'spotx.tv' },
+      ];
       const netEvents = passiveLog.filter(e => !e.kind);
-      const interactions = passiveLog.filter(e => e.kind === 'interaction');
-      const times = passiveLog.map(e => e.t);
-      const fromMs = Math.min(...times);
-      const toMs = Math.max(...times);
-
-      // Group net events by domain
-      const domainMap = {};
+      const vendorMap = {};
       for (const e of netEvents) {
-        let domain;
-        try { domain = new URL(e.url).hostname; } catch (_) { domain = 'unknown'; }
-        if (!domainMap[domain]) domainMap[domain] = { domain, count: 0, totalMs: 0, methods: {}, statuses: {}, slowest: null };
-        const d = domainMap[domain];
-        d.count++;
-        d.totalMs += e.ms || 0;
-        d.methods[e.method] = (d.methods[e.method] || 0) + 1;
-        d.statuses[e.status] = (d.statuses[e.status] || 0) + 1;
-        if (!d.slowest || e.ms > d.slowest.ms) d.slowest = { url: e.url, ms: e.ms };
+        for (const { vendor, pattern } of BEACON_VENDORS) {
+          if (e.url && e.url.includes(pattern)) {
+            const key = vendor;
+            if (!vendorMap[key]) vendorMap[key] = { vendor, count: 0, urls: [], lastTs: 0 };
+            vendorMap[key].count++;
+            vendorMap[key].lastTs = Math.max(vendorMap[key].lastTs, e.t || 0);
+            if (!vendorMap[key].urls.includes(e.url)) vendorMap[key].urls.push(e.url);
+            break;
+          }
+        }
       }
-
-      const domains = Object.values(domainMap)
-        .map(d => ({ ...d, avgMs: Math.round(d.totalMs / d.count) }))
-        .sort((a, b) => b.count - a.count);
-
-      // Overall slowest
-      const slowest = [...netEvents]
-        .filter(e => e.ms > 0)
-        .sort((a, b) => b.ms - a.ms)
-        .slice(0, 10)
-        .map(e => ({ url: e.url, ms: e.ms, method: e.method, status: e.status }));
-
-      // Status code breakdown
-      const statusCodes = {};
-      for (const e of netEvents) statusCodes[e.status] = (statusCodes[e.status] || 0) + 1;
-
-      // Error calls (4xx/5xx)
-      const errors = netEvents.filter(e => e.status >= 400)
-        .map(e => ({ url: e.url, status: e.status, method: e.method, ms: e.ms }));
-
-      return {
-        enabled: passiveMode,
-        count: passiveLog.length,
-        netCount: netEvents.length,
-        interactionCount: interactions.length,
-        timespan: { fromMs, toMs, durationSec: Math.round((toMs - fromMs) / 1000) },
-        domains,
-        slowest,
-        statusCodes,
-        errors,
-        interactions,
-      };
+      const beacons = Object.values(vendorMap).sort((a, b) => b.count - a.count);
+      return { total: netEvents.length, beaconsFound: beacons.length, beacons };
     }
 
     case 'click_element':
@@ -723,6 +728,40 @@ function passiveOnCompleted(details) {
 
 function passiveOnError(details) {
   passivePending.delete(details.requestId);
+}
+
+function buildPassiveSummary() {
+  if (!passiveLog.length) return { enabled: passiveMode, count: 0, summary: null };
+  const netEvents = passiveLog.filter(e => !e.kind);
+  const interactions = passiveLog.filter(e => e.kind === 'interaction');
+  const times = passiveLog.map(e => e.t);
+  const fromMs = Math.min(...times);
+  const toMs = Math.max(...times);
+  const domainMap = {};
+  for (const e of netEvents) {
+    let domain;
+    try { domain = new URL(e.url).hostname; } catch (_) { domain = 'unknown'; }
+    if (!domainMap[domain]) domainMap[domain] = { domain, count: 0, totalMs: 0, methods: {}, statuses: {}, slowest: null };
+    const d = domainMap[domain];
+    d.count++;
+    d.totalMs += e.ms || 0;
+    d.methods[e.method] = (d.methods[e.method] || 0) + 1;
+    d.statuses[e.status] = (d.statuses[e.status] || 0) + 1;
+    if (!d.slowest || e.ms > d.slowest.ms) d.slowest = { url: e.url, ms: e.ms };
+  }
+  const domains = Object.values(domainMap)
+    .map(d => ({ ...d, avgMs: Math.round(d.totalMs / d.count) }))
+    .sort((a, b) => b.count - a.count);
+  const slowest = [...netEvents].filter(e => e.ms > 0).sort((a, b) => b.ms - a.ms).slice(0, 10)
+    .map(e => ({ url: e.url, ms: e.ms, method: e.method, status: e.status }));
+  const statusCodes = {};
+  for (const e of netEvents) statusCodes[e.status] = (statusCodes[e.status] || 0) + 1;
+  const errors = netEvents.filter(e => e.status >= 400)
+    .map(e => ({ url: e.url, status: e.status, method: e.method, ms: e.ms }));
+  return { enabled: passiveMode, count: passiveLog.length, netCount: netEvents.length,
+    interactionCount: interactions.length,
+    timespan: { fromMs, toMs, durationSec: Math.round((toMs - fromMs) / 1000) },
+    domains, slowest, statusCodes, errors, interactions };
 }
 
 function setPassiveMode(enabled) {
@@ -1763,8 +1802,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     connectionState = 'disconnected';
     connectedAt = null;
     sessionInfo = null;
-    SERVER_URL = null;
     updateIcon();
+    // Auto-reconnect if we still have a server URL (don't clear it — SW restart loses in-memory state)
+    if (SERVER_URL) {
+      setTimeout(() => connect(), 3000);
+    }
     return false;
   }
 
@@ -1862,6 +1904,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === 'reconnect') {
     SERVER_URL = message.serverUrl;
+    chrome.storage.local.set({ tethernetServerUrl: SERVER_URL });
     chrome.runtime.sendMessage({ type: 'ws_disconnect' }).catch(() => {});
     connect();
     sendResponse({ ok: true });
@@ -1875,7 +1918,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     connectedAt = null;
     sessionInfo = null;
     updateIcon();
-    chrome.storage.local.remove('tetherwebServerUrl');
+    chrome.storage.local.remove('tethernetServerUrl');
     sendResponse({ ok: true });
     return false;
   }
@@ -1888,6 +1931,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === 'popup_get_passive_mode') {
     sendResponse({ enabled: passiveMode, count: passiveLog.length });
+    return false;
+  }
+
+  if (message.type === 'popup_summarize_passive_log') {
+    sendResponse(buildPassiveSummary());
     return false;
   }
 
@@ -1969,12 +2017,17 @@ updateIcon();
 updateRecordingIndicator();
 buildRecordingIconCache();
 
-chrome.storage.local.get(['tetherwebConsent', 'tethernetPassiveMode']).then(({ tetherwebConsent, tethernetPassiveMode }) => {
+chrome.storage.local.get(['tetherwebConsent', 'tethernetPassiveMode', 'tethernetServerUrl']).then(({ tetherwebConsent, tethernetPassiveMode, tethernetServerUrl }) => {
   consentGranted = !!tetherwebConsent;
   console.log(`[Tethernet] Consent: ${consentGranted ? 'granted' : 'not granted'}`);
   if (tethernetPassiveMode) {
     setPassiveMode(true);
     console.log('[Tethernet] Passive mode restored from storage');
+  }
+  if (tethernetServerUrl) {
+    SERVER_URL = tethernetServerUrl;
+    console.log('[Tethernet] Reconnecting to', SERVER_URL);
+    connect();
   }
 });
 

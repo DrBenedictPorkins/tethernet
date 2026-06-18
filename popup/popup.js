@@ -69,6 +69,7 @@ function initMainUI() {
 
   const passiveToggle = document.getElementById('passive-toggle');
   const passiveCount = document.getElementById('passive-count');
+  const passiveReportBtn = document.getElementById('passive-report-btn');
 
   let connectedAt = null;
   let updateTimer = null;
@@ -207,10 +208,16 @@ function initMainUI() {
     if (count > 0) {
       passiveCount.textContent = `${count} captured`;
       passiveCount.classList.remove('hidden');
+      passiveReportBtn.classList.remove('hidden');
     } else {
       passiveCount.classList.add('hidden');
+      passiveReportBtn.classList.add('hidden');
     }
   }
+
+  passiveReportBtn.addEventListener('click', () => {
+    chrome.tabs.create({ url: chrome.runtime.getURL('report/report.html') });
+  });
 
   chrome.runtime.sendMessage({ type: 'popup_get_passive_mode' })
     .then(res => {

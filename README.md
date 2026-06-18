@@ -430,6 +430,16 @@ Claude: Overall: 89/100
 | `wait_for_url` | Wait until the URL matches a pattern |
 | `wait_for_navigation` | Wait for the page to finish navigating |
 
+### Passive Mode
+
+Passive mode silently logs all network activity in a ring buffer (max 500 entries) as you browse — no DevTools, no capture session, no user action required. Enable it from the extension popup. The buffer persists across page navigations until you clear it or disable passive mode.
+
+| Tool | Description |
+|---|---|
+| `get_passive_log` | Return entries from the passive ring buffer. Filter by `type`: `net` (network requests), `interaction` (clicks/submits), or `all`. Optional `limit` |
+| `clear_passive_log` | Clear the passive log buffer |
+| `find_beacons` | Scan the passive log and classify entries by analytics/telemetry vendor (Conviva, Nielsen, Comscore, New Relic, GA4, Segment, Amplitude, and others). Returns grouped results by category |
+
 ### Network Capture
 
 Network capture records HTTP requests and responses — including full response bodies — without opening DevTools. Chrome's Debugger API is used for response bodies; a "Chrome is being controlled by automated software" bar appears on the recorded tab while recording is active.
@@ -442,6 +452,19 @@ Network capture records HTTP requests and responses — including full response 
 | `get_capture` | Retrieve the current capture. Modes: `full`, `slim` (headers only), `summary` (stats), or request specific entry indexes |
 | `find_in_capture` | Search captured entries by query string or regex across URL, headers, request body, or response body |
 | `clear_capture` | Clear all captured data |
+
+### Request Interception & Mocking
+
+Intercept live fetch/XHR calls from a page, inspect their payloads, replay them with modifications, or stub the response entirely. Useful for testing how a page behaves under different server conditions without a real backend.
+
+| Tool | Description |
+|---|---|
+| `intercept_requests` | Install hooks into `fetch` and `XMLHttpRequest` on the page to capture outgoing requests matching a URL pattern. Captured requests accumulate until cleared |
+| `get_intercepted_requests` | Return all requests captured since the last intercept or clear. Includes URL, method, headers, and request body |
+| `clear_intercepted_requests` | Remove all captured intercept data and uninstall the hooks |
+| `replay_request` | Re-fire a previously captured request, optionally overriding URL, method, headers, or body. Returns status, response headers, and body |
+| `mock_endpoint` | Intercept all requests matching a URL pattern and return a synthetic response (status, headers, body) instead of hitting the real server |
+| `clear_mocks` | Remove all active endpoint mocks |
 
 ### Console & Error Capture
 

@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Tethernet",
   "version": "1.0.0",
-  "description": "Developer tool connecting Chrome to a local AI assistant for DOM inspection, network capture, and page interaction. Localhost only.",
+  "description": "Connect Chrome to a local AI coding session. DOM inspection, network capture, request interception & mocking, and page interaction. Localhost only.",
   "permissions": [
     "tabs",
     "storage",

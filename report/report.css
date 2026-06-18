@@ -1,0 +1,54 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', monospace;
+  background: #0d0d14;
+  color: #ccc;
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 32px;
+}
+
+.container { max-width: 1200px; margin: 0 auto; }
+
+.header { margin-bottom: 28px; padding-bottom: 16px; border-bottom: 1px solid #1e1e2e; }
+.header h1 { font-size: 20px; font-weight: 700; color: #00E5D0; margin-bottom: 8px; }
+
+.meta { display: flex; gap: 20px; font-size: 12px; color: #555; }
+.meta span::before { content: '·'; margin-right: 6px; color: #333; }
+.meta span:first-child::before { content: ''; margin: 0; }
+
+.section { margin-bottom: 32px; }
+.section h2 { font-size: 13px; font-weight: 600; color: #00E5D0; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+.count { font-size: 11px; color: #444; font-weight: 400; text-transform: none; letter-spacing: 0; }
+
+.badges { display: flex; flex-wrap: wrap; gap: 8px; }
+.badge { padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; border: 1px solid; }
+
+.data-table { width: 100%; border-collapse: collapse; }
+.data-table th { text-align: left; padding: 6px 10px; font-size: 11px; font-weight: 600; color: #444; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid #1a1a28; }
+.data-table td { padding: 6px 10px; border-bottom: 1px solid #111118; vertical-align: top; }
+.data-table tr:hover td { background: #111118; }
+
+.domain-cell { color: #e0e0e8; font-weight: 500; max-width: 200px; word-break: break-all; }
+.url-cell { color: #666; font-size: 11px; max-width: 500px; word-break: break-all; }
+.slowest-cell { font-size: 11px; color: #555; }
+.slowest-ms { color: #f59e0b; font-weight: 600; margin-right: 6px; }
+.slowest-url { color: #444; }
+.slow-ms { color: #f59e0b; font-weight: 700; }
+
+.num { text-align: right; white-space: nowrap; color: #888; }
+
+.method { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 700; letter-spacing: 0.3px; margin-right: 2px; }
+.method-get { background: #1e3a2e; color: #22c55e; }
+.method-post { background: #1e2a3a; color: #60a5fa; }
+.method-put { background: #2a1e3a; color: #a78bfa; }
+.method-delete { background: #3a1e1e; color: #f87171; }
+.method-patch { background: #2a2a1e; color: #fbbf24; }
+.method-click { background: #1e2a3a; color: #60a5fa; }
+.method-submit { background: #2a1e3a; color: #a78bfa; }
+
+.statuses { white-space: nowrap; }
+.statuses span { margin-right: 6px; font-size: 11px; }
+
+.loading, .empty, .none { color: #444; font-style: italic; padding: 12px 0; }
