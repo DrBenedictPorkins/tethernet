@@ -7,6 +7,9 @@
 let ws = null;
 let pendingUrl = null;
 let keepAliveTimer = null;
+let reconnectTimer = null;
+let reconnectDelay = 2000;
+const RECONNECT_MAX = 30000;
 
 function connect(serverUrl) {
   if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
@@ -20,12 +23,14 @@ function connect(serverUrl) {
   }
 
   pendingUrl = serverUrl;
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
 
   try {
     ws = new WebSocket(serverUrl);
 
     ws.onopen = () => {
       console.log('[Tethernet/offscreen] WebSocket connected');
+      reconnectDelay = 2000;
       ws.send(JSON.stringify({ type: 'hello', browser: 'chrome' }));
       chrome.runtime.sendMessage({ type: 'ws_open' }).catch(() => {});
     };
@@ -56,10 +61,15 @@ function connect(serverUrl) {
     };
 
     ws.onclose = () => {
-      console.log('[Tethernet/offscreen] WebSocket closed');
+      console.log('[Tethernet/offscreen] WebSocket closed, reconnecting in', reconnectDelay, 'ms');
       ws = null;
-      pendingUrl = null;
       chrome.runtime.sendMessage({ type: 'ws_closed' }).catch(() => {});
+      // Auto-reconnect with exponential backoff
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        if (pendingUrl) connect(pendingUrl);
+      }, reconnectDelay);
+      reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX);
     };
   } catch (error) {
     console.error('[Tethernet/offscreen] Failed to create WebSocket:', error);
@@ -68,12 +78,13 @@ function connect(serverUrl) {
 }
 
 function disconnect() {
+  pendingUrl = null;
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   if (ws) {
     ws.onclose = null;
     ws.onerror = null;
     ws.close();
     ws = null;
-    pendingUrl = null;
   }
 }
 

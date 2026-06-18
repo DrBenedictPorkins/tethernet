@@ -23,10 +23,12 @@ The MCP server is extension-agnostic — it sends the same JSON protocol to whic
 | File | Purpose |
 |------|---------|
 | `manifest.json` | Permissions: `tabs`, `scripting`, `debugger`, `webRequest`, `cookies` |
-| `service-worker.js` | WebSocket client (via offscreen), command router, network capture |
-| `content.js` | DOM interaction: click, type, scroll, hover, element registry (`tref_N`) |
-| `offscreen/offscreen.js` | Persistent WebSocket (service workers are ephemeral in MV3) |
-| `popup/popup.js` | Connection UI — user enters `localhost:PORT`, shows connection state |
+| `service-worker.js` | WebSocket client (via offscreen), command router, network capture, passive mode, intercept/mock/beacon tools |
+| `content.js` | DOM interaction: click, type, scroll, hover, element registry (`tref_N`), beacon interceptor |
+| `offscreen/offscreen.js` | Persistent WebSocket with exponential backoff reconnect (2s→4s→8s→max 30s) |
+| `popup/popup.js` | Connection UI — user enters `localhost:PORT`, shows connection state, passive mode toggle, View Report button |
+| `report/report.html` | Passive log viewer — renders ring buffer as sortable network table |
+| `test/telemetry-ping.py` | Test harness — fires randomized telemetry pings to 7 vendor endpoints (Conviva, Nielsen, Comscore, New Relic, GA4, Segment, Amplitude) |
 
 ### MCP server (`tethernet-mcp/src/`)
 | File | Purpose |
@@ -60,6 +62,20 @@ The MCP server and both extensions communicate via JSON over WebSocket:
 Action names are the MCP tool names (e.g., `click_element`, `navigate`, `take_screenshot`).
 
 ## Making Changes
+
+### Current tool inventory (beyond core DOM/nav)
+
+| Tool | Where handled |
+|------|--------------|
+| `get_passive_log` | service-worker.js — reads ring buffer from `chrome.storage.local` |
+| `clear_passive_log` | service-worker.js |
+| `find_beacons` | service-worker.js — pattern-matches passive log URLs against vendor domain list |
+| `intercept_requests` | service-worker.js → content.js — injects fetch/XHR hooks into page MAIN world |
+| `get_intercepted_requests` | service-worker.js → content.js |
+| `clear_intercepted_requests` | service-worker.js → content.js |
+| `replay_request` | service-worker.js → content.js |
+| `mock_endpoint` | service-worker.js → content.js |
+| `clear_mocks` | service-worker.js → content.js |
 
 ### Adding a new MCP tool
 
@@ -132,3 +148,23 @@ Pass `tref_N` as the `selector` parameter to any interaction tool.
 ## No Build Step (Extensions)
 
 Both extensions are plain JavaScript — no bundler, no transpilation. Edit files directly. The MCP server is TypeScript and requires `npm run build`.
+
+## WebSocket Reconnect Behavior
+
+The offscreen document (`offscreen/offscreen.js`) auto-reconnects with exponential backoff on disconnect:
+- Initial delay: 2s, doubles each attempt, caps at 30s
+- `pendingUrl` is cleared on explicit disconnect to stop the loop
+- Service worker persists `tethernetServerUrl` to `chrome.storage.local` and restores the connection on startup
+
+## Passive Mode
+
+Passive mode is a webRequest ring buffer (max 500 entries) that captures all network activity silently. Enabled/disabled via the popup toggle. State persists in `chrome.storage.local` as `tethernetPassiveMode`. The popup shows a count and a **View Report** button that opens `report/report.html` once entries exist.
+
+## Test Harness
+
+`test/telemetry-ping.py` — standalone Python test script for validating Tethernet's telemetry detection. Fires randomized pings to 7 analytics vendors. Run with:
+
+```bash
+uv run test/telemetry-ping.py --endpoint all
+uv run test/telemetry-ping.py --endpoint conviva --playhead 342
+```
