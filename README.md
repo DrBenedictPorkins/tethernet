@@ -72,7 +72,7 @@ Green icon = live.
 ## Requirements
 
 - Node.js 18+
-- Chrome — Firefox: [firefox-tethernet](https://github.com/DrBenedictPorkins/firefox-tethernet)
+- Chrome
 
 ---
 
