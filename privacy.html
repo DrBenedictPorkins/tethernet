@@ -19,70 +19,71 @@
 <body>
 
 <h1>Privacy Policy</h1>
-<p class="meta">Applies to: <strong>Tethernet</strong> (Chrome) &mdash; Last updated: July 2026</p>
+<p class="meta">Tethernet — Chrome Extension &mdash; Last updated: July 2026</p>
 
 <div class="highlight">
-  <strong>Short version:</strong> These extensions connect your browser to a server running on your own computer. They do not collect, store, or transmit your data to any external server, company, or third party. Everything stays on your machine.
+  <strong>Short version:</strong> Tethernet connects your browser to a server running on your own computer. It does not collect, store, or transmit your data to any external server, company, or third party. Everything stays on your machine.
 </div>
 
 <h2>1. Who We Are</h2>
 <p>Tethernet is a developer tool published by ByteClub. Contact: <a href="mailto:mike@byteclub.com">mike@byteclub.com</a></p>
 
-<h2>2. What These Extensions Do</h2>
+<h2>2. What This Extension Does</h2>
 <p>Tethernet creates a local WebSocket connection between your Chrome browser and a server process running on your own machine (localhost). This allows a locally-running AI assistant (such as Claude Code) to read page content, take screenshots, inspect network traffic, and interact with web pages at your direction.</p>
-<p>The extensions are <strong>developer tools</strong>. They require manual setup, a locally-running server process, and an explicit consent step before any capability is active.</p>
+<p>This is a <strong>developer tool</strong>. It requires manual setup, a locally-running server process, and an explicit consent step before any capability is active. It does nothing on its own.</p>
 
 <h2>3. Data Accessed and Where It Goes</h2>
 <table>
   <tr><th>Data type</th><th>When accessed</th><th>Where it goes</th></tr>
-  <tr><td>Page content, DOM structure, text</td><td>Only when a developer session is active and a command is issued</td><td>Sent to your local machine only (ws://localhost)</td></tr>
-  <tr><td>Screenshots</td><td>Only when explicitly requested via a tool call</td><td>Sent to your local machine only</td></tr>
-  <tr><td>Network request metadata (URLs, headers, status codes, timing)</td><td>Only during active network capture sessions or passive mode</td><td>Stored in-memory in the extension; accessible only to your local session</td></tr>
-  <tr><td>HTTP response bodies</td><td>Only during active debugger-attached capture (Chrome only)</td><td>Sent to your local machine only</td></tr>
-  <tr><td>Non-HttpOnly cookies</td><td>Only when explicitly requested</td><td>Sent to your local machine only</td></tr>
+  <tr><td>Page content, DOM structure, text</td><td>Only when a developer session is active and a command is issued</td><td>Your local machine only (ws://localhost)</td></tr>
+  <tr><td>Screenshots</td><td>Only when explicitly requested</td><td>Your local machine only</td></tr>
+  <tr><td>Network request metadata (URLs, headers, status codes, timing)</td><td>Only during active capture sessions or when passive mode is enabled</td><td>Stored in-memory in the extension; accessible only to your local session</td></tr>
+  <tr><td>HTTP response bodies</td><td>Only during active debugger-attached capture sessions</td><td>Your local machine only</td></tr>
+  <tr><td>Non-HttpOnly cookies</td><td>Only when explicitly requested</td><td>Your local machine only</td></tr>
   <tr><td>JavaScript execution results</td><td>Only when a script is sent from your local session</td><td>Returned to your local machine only</td></tr>
-  <tr><td>Intercepted/captured beacon data (passive mode)</td><td>When passive mode is enabled by the user</td><td>Stored in-memory in the extension (ring buffer, max 500 entries); never transmitted externally</td></tr>
+  <tr><td>Passive mode network log</td><td>When passive mode is enabled by the user</td><td>Stored in-memory in the extension (ring buffer, max 500 entries); never transmitted externally</td></tr>
 </table>
 
 <h2>4. Data We Do NOT Collect</h2>
 <ul>
   <li>No data is sent to ByteClub or any third party.</li>
-  <li>No analytics, crash reporting, or telemetry is built into the extension itself.</li>
+  <li>No analytics, crash reporting, or telemetry is built into the extension.</li>
   <li>No data is stored on any remote server.</li>
-  <li>No data persists beyond your browser session except the connection URL and consent state, which are stored in browser local storage on your device only.</li>
-  <li>HttpOnly cookies are never accessible to the extension — this is a browser platform limitation.</li>
+  <li>No data persists beyond your browser session except the connection port and consent state, stored in browser local storage on your device only.</li>
+  <li>HttpOnly cookies are never accessible — this is a Chrome platform limitation.</li>
+  <li>No JavaScript is ever fetched from a remote URL. All code executed in pages originates from the user's own local process.</li>
 </ul>
 
 <h2>5. Permissions and Why They Are Required</h2>
 <table>
   <tr><th>Permission</th><th>Why it is required</th></tr>
-  <tr><td><code>tabs</code></td><td>List open tabs, switch between them, and identify the active tab for tool commands.</td></tr>
-  <tr><td><code>storage</code></td><td>Persist user consent and the local server URL between browser sessions.</td></tr>
-  <tr><td><code>webNavigation</code></td><td>Enumerate iframes within a page for inspection commands.</td></tr>
-  <tr><td><code>webRequest</code></td><td>Capture HTTP request metadata (URL, method, headers, status) during on-demand developer debugging sessions and passive mode.</td></tr>
-  <tr><td><code>cookies</code></td><td>Read and set non-HttpOnly cookies to help debug authentication and session state — equivalent to the browser DevTools Application panel.</td></tr>
-  <tr><td><code>scripting</code></td><td>Inject content scripts and execute JavaScript in pages to inspect DOM state, read storage, and interact with elements — equivalent to the DevTools console.</td></tr>
-  <tr><td><code>offscreen</code> (Chrome only)</td><td>Maintain a persistent WebSocket connection. Chrome MV3 service workers are terminated after ~30 seconds of inactivity; an offscreen document holds the connection open.</td></tr>
-  <tr><td><code>debugger</code> (Chrome only)</td><td>Capture HTTP response bodies during active capture sessions. Without this API, response payloads are not accessible to extensions — this is the same data visible in the DevTools Network panel. The debugger is attached only on the active tab, only while a capture session is running.</td></tr>
-  <tr><td><code>windows</code> (Chrome only)</td><td>Focus the correct browser window before taking a screenshot.</td></tr>
-  <tr><td><code>downloads</code> (Chrome only)</td><td>Monitor download completion events to report filename, size, and MIME type. No files are initiated or modified autonomously.</td></tr>
-  <tr><td><code>&lt;all_urls&gt;</code></td><td>Content scripts must be injectable on any page because developers use this tool across many different sites. Nothing happens on any page unless the user has connected and issued a command.</td></tr>
+  <tr><td><code>tabs</code></td><td>List open tabs, switch between them, and identify the active tab for commands.</td></tr>
+  <tr><td><code>storage</code></td><td>Persist user consent state and the local server port between browser sessions.</td></tr>
+  <tr><td><code>webNavigation</code></td><td>Enumerate iframes within a page so developers can inspect them.</td></tr>
+  <tr><td><code>webRequest</code></td><td>Capture HTTP request metadata (URL, method, headers, status, timing) during developer debugging sessions and passive mode. Listeners are installed but idle — no processing occurs when capture is not active.</td></tr>
+  <tr><td><code>cookies</code></td><td>Read and set non-HttpOnly cookies to help debug authentication and session state — equivalent to the DevTools Application panel. HttpOnly cookies remain inaccessible per Chrome's design.</td></tr>
+  <tr><td><code>scripting</code></td><td>Execute JavaScript in pages at the developer's direction — equivalent to the DevTools console. Code originates exclusively from the user's local process, never from a remote server.</td></tr>
+  <tr><td><code>offscreen</code></td><td>Maintain a persistent WebSocket connection. Chrome MV3 service workers are killed after ~30 seconds of inactivity; the offscreen document keeps the connection to localhost alive.</td></tr>
+  <tr><td><code>debugger</code></td><td>Capture HTTP response bodies during active capture sessions — the same data visible in the DevTools Network panel. Without this API, response payloads are inaccessible to extensions. The debugger attaches only to the active tab, only while a capture session is explicitly running, and detaches immediately when the session ends. Chrome shows an "automated software" info bar on the recorded tab during this time.</td></tr>
+  <tr><td><code>windows</code></td><td>Focus the correct browser window before taking a screenshot when multiple windows are open.</td></tr>
+  <tr><td><code>downloads</code></td><td>Monitor download completion events to report filename, size, and MIME type after the user initiates a download. No files are downloaded or modified autonomously.</td></tr>
+  <tr><td><code>&lt;all_urls&gt;</code></td><td>Content scripts must be injectable on any page because developers work across many different sites. Nothing happens on any page unless the user has connected and issued a command. Chrome automatically blocks injection on chrome://, chromewebstore.google.com, and other sensitive pages.</td></tr>
 </table>
 
 <h2>6. Consent and Control</h2>
-<p>Tethernet displays a full onboarding page explaining its capabilities and risks before any functionality is enabled. The user must read the disclosure and check a consent checkbox before the extension activates. Consent can be revoked at any time from the extension popup, which immediately disconnects the session and disables all capabilities.</p>
+<p>On first install, an onboarding page opens explaining every capability and its risks — including prompt injection — before any functionality is enabled. The user must check a consent checkbox before the extension activates. Consent can be revoked at any time from the extension popup, which immediately disconnects the session and disables all capabilities.</p>
 
 <h2>7. Security Architecture</h2>
-<p>The WebSocket connection is always <code>ws://localhost:PORT</code> — it never connects to any remote server. The connection port is entered manually by the user and changes each session. All data exchanged stays within the user's own machine. The extension has no hardcoded remote endpoints of any kind.</p>
+<p>The WebSocket connection is always <code>ws://localhost:PORT</code> — it never connects to any remote server. The port is entered manually by the user and changes each session. All data exchanged stays on the user's own machine. The extension has no hardcoded remote endpoints.</p>
 
 <h2>8. Children's Privacy</h2>
-<p>These extensions are developer tools not intended for users under 13. We do not knowingly collect any information from children.</p>
+<p>Tethernet is a developer tool not intended for users under 13. We do not knowingly collect any information from children.</p>
 
 <h2>9. Changes to This Policy</h2>
-<p>If we make material changes, we will update the "Last updated" date above. Continued use after changes constitutes acceptance.</p>
+<p>Material changes will be reflected in the "Last updated" date above.</p>
 
 <h2>10. Contact</h2>
-<p>Questions: <a href="mailto:mike@byteclub.com">mike@byteclub.com</a></p>
+<p><a href="mailto:mike@byteclub.com">mike@byteclub.com</a></p>
 
 </body>
 </html>
