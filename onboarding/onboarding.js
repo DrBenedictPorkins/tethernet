@@ -12,7 +12,7 @@ checkbox.addEventListener('change', () => {
 enableBtn.addEventListener('click', async () => {
   if (!checkbox.checked) return;
 
-  await chrome.storage.local.set({ tetherwebConsent: true });
+  await chrome.storage.local.set({ tethernetConsent: true });
 
   enableBtn.textContent = 'Enabled!';
   enableBtn.style.backgroundColor = '#28a745';
@@ -20,8 +20,8 @@ enableBtn.addEventListener('click', async () => {
   setTimeout(() => window.close(), 800);
 });
 
-chrome.storage.local.get('tetherwebConsent').then(({ tetherwebConsent }) => {
-  if (tetherwebConsent) {
+chrome.storage.local.get('tethernetConsent').then(({ tethernetConsent }) => {
+  if (tethernetConsent) {
     checkbox.checked = true;
     enableBtn.disabled = false;
     enableBtn.textContent = 'Already Enabled';
