@@ -1,6 +1,6 @@
 # Tethernet
 
-Browser co-pilot for Claude Code and Claude Desktop. Connects your live Chrome session to Claude via the Model Context Protocol — Claude sees your screen, reads page state, captures network traffic, and guides you step by step through complex web workflows in your real logged-in browser.
+Browser co-pilot for Claude Code and Claude Desktop — built for network depth. Tethernet connects your real Chrome session to Claude and gives it tools most browser extensions don't have: **full HTTP response bodies via CDP**, **passive background capture**, **live request interception and replay**, and **automatic telemetry vendor classification**. All traffic stays on localhost. No cloud. No AI inside the extension.
 
 ---
 
@@ -102,12 +102,21 @@ Claude navigates, screenshots, guides, and interacts — in your real browser se
 
 ## What Tethernet Does
 
-Tethernet turns Claude into a browser co-pilot that works inside your real Chrome session. You're already logged in everywhere — no credential setup, no OAuth flows, no cookie injection. Claude sees what you see, interacts with what you can interact with, and has full visibility into what's happening underneath.
+Tethernet turns Claude into a browser co-pilot that works inside your real Chrome session. You're already logged in everywhere — no credential setup, no OAuth flows, no cookie injection. Claude sees what you see, interacts with what you can interact with, and has full visibility into what's happening on the network.
+
+**Where Tethernet goes deeper than other browser extensions:**
+
+- **Full response bodies** — Claude sees complete HTTP request + response payloads via Chrome's Debugger API, not just URLs and headers. Same data as the DevTools Network panel, without opening DevTools.
+- **Passive Mode** — silently logs all network activity as you browse. No capture session to start, no DevTools to open. Browse normally, then ask Claude what was on the wire.
+- **Request interception and replay** — Claude hooks into `fetch`/`XHR`, captures calls mid-flight, replays with modified payloads, or stubs any endpoint with a synthetic response. Test server behavior without touching your backend.
+- **Telemetry detection** — classifies third-party network calls by vendor (Conviva, Nielsen, Comscore, GA4, Segment, Amplitude, New Relic). Audit what a page actually sends to third parties.
 
 **When to use it:**
 
+- Debugging an API — capture live network traffic with full response bodies from your authenticated session
+- Auditing third-party telemetry — find every analytics and tracking call a page makes, classified by vendor
+- Testing API behavior — intercept live requests, replay with modified payloads, or mock responses without a real server
 - Navigating complex admin consoles (AWS, GCP, Stripe, App Store Connect, DNS panels) with Claude confirming each step via screenshot
-- Debugging an API — capture live network traffic from your authenticated session and see exactly what the server returns
 - Automating repetitive form work across many records
 - Extracting structured data from auth-gated pages — Readability runs on your real logged-in session
 - Investigating bugs — console errors, network failures, and WebSocket frames all in one place

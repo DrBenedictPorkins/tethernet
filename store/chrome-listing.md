@@ -7,75 +7,84 @@ Tethernet
 Developer Tools
 
 ## Short Description (132 chars max)
-Connect Chrome to a local AI coding session. Live DOM inspection, network capture, request interception, and page interaction for developers.
+MCP browser extension for Claude Code: network capture + response bodies, passive mode, request interception, telemetry detection.
 
 ## Detailed Description
 
-Tethernet is a developer tool that creates a local bridge between your Chrome browser and an AI assistant (such as Claude Code) running on your own machine.
+**What Tethernet gives Claude Code that other browser extensions don't**
 
-It is not an AI extension. It contains no AI. It connects your browser to a local server you run — giving your AI coding session the ability to see and interact with what's in your browser in real time.
+Most browser MCP extensions give Claude the ability to click buttons and read pages. Tethernet goes deeper — into the network layer, into live request payloads, into what your pages are actually sending to third parties.
 
-**What it does**
+**Full HTTP response bodies.** Claude captures complete request and response payloads using Chrome's Debugger API — not just URLs and status codes. It sees exactly what your API returns, the same data you'd get in the DevTools Network panel, without you opening DevTools.
 
-Once connected, your local AI session can:
+**Passive Mode.** Tethernet silently logs all network activity in a ring buffer as you browse normally. No capture session to start. No DevTools panel to open. Just browse, then ask Claude what was on the wire. Works across page navigations automatically.
+
+**Request interception and replay.** Claude hooks into the page's `fetch` and `XMLHttpRequest` calls, captures outgoing requests mid-flight, replays them with modified payloads, and stubs responses with synthetic data — without touching your server. Test how your page behaves under different API responses by mocking any endpoint.
+
+**Telemetry detection.** Claude scans captured traffic and classifies third-party calls by vendor — Conviva, Nielsen, Comscore, Google Analytics 4, Segment, Amplitude, New Relic, and more. Audit what data a page is actually sending, not what the privacy policy claims.
+
+---
+
+**Standard browser co-pilot capabilities**
+
+On top of network depth, Claude can also:
 
 - Read page content, DOM structure, and extracted text from any open tab
-- Take screenshots of pages and specific elements
+- Take screenshots of pages or specific elements
 - Click, type, scroll, hover, and fill forms at your direction
-- Execute JavaScript in a page — identical to the DevTools console
-- Capture HTTP requests and responses, including response bodies, without opening DevTools
+- Execute JavaScript in the page — same access as the DevTools console
 - Read and set cookies to debug authentication and session state
-- Monitor downloads, manage tabs, and navigate between pages
-- Capture all network activity silently in the background (Passive Mode)
-- Intercept outgoing fetch/XHR requests and inspect or modify their payloads
-- Mock endpoints — intercept requests matching a URL pattern and return your own response
-- Replay captured requests with modified payloads for testing
-- Auto-identify third-party telemetry calls (analytics, ad pixels, tracking beacons) on any page
+- Manage tabs, navigate, handle dialogs, upload files
+- Intercept WebSocket frames
+- Run Lighthouse-style performance, accessibility, and SEO audits on your real authenticated session — no headless Chrome
+- Store site layout maps and reusable scripts that persist across Claude sessions
+
+---
 
 **Who it is for**
 
-Developers who use Claude Code, Claude Desktop, or any MCP-compatible AI assistant for web development, debugging, or site analysis. Not for general browser users — this tool requires running a local server process and does not do anything useful on its own.
+Developers using Claude Code, Claude Desktop, or any MCP-compatible AI assistant who need to debug APIs, audit network traffic, investigate third-party telemetry, or test how pages behave under different server responses.
 
-**How it works**
+This extension does nothing on its own — it requires the Tethernet MCP server running locally. Not for general browser users.
 
-1. Install the extension
-2. Run the Tethernet MCP server on your machine (`node dist/index.js`)
-3. Start a Claude Code session and call `get_connection_info` to get your port
-4. Click the Tethernet icon, enter the port, and connect
+**How to connect**
+
+1. Install this extension
+2. Run: `claude mcp add tethernet --scope user -- npx -y @drbenedictporkins/tethernet-mcp`
+3. Ask Claude: "What is the Tethernet connection port?"
+4. Click the Tethernet icon and enter the port
 
 All traffic goes to `ws://localhost:PORT` — your own machine. Nothing is sent to any external server.
 
 **Privacy**
 
-This extension does not collect, store, or transmit your data anywhere. All WebSocket communication is exclusively to localhost. No analytics, no telemetry, no external connections of any kind. See the full privacy policy at: https://drbenedictporkins.github.io/tethernet/privacy.html
+This extension does not collect, store, or transmit your data anywhere. All WebSocket communication is exclusively to localhost. No analytics, no telemetry, no external connections of any kind. Full privacy policy: https://drbenedictporkins.github.io/tethernet/privacy.html
 
 **Permissions explained**
 
-Every permission is required for a specific developer workflow:
-
-- `debugger` — captures HTTP response bodies during active capture sessions (same data as the DevTools Network panel). Attached only to the active tab, only while recording. Detaches immediately when capture ends.
-- `scripting` + `<all_urls>` — executes JavaScript in pages at the developer's direction. Equivalent to typing in the DevTools console. Required on all URLs because developers work across many sites.
-- `webRequest` — reads request metadata (URLs, headers, timing) for network debugging. Listeners are registered but idle until a capture session starts.
-- `cookies` — reads non-HttpOnly cookies to debug auth and session state. HttpOnly cookies are inaccessible by platform design.
-- `offscreen` — holds the WebSocket connection open. Chrome MV3 service workers are killed after ~30s of inactivity; the offscreen document keeps the connection alive.
+- `debugger` — captures full HTTP response bodies (same data as the DevTools Network panel). Attached only to the active tab during capture, detaches immediately when done.
+- `scripting` + `<all_urls>` — runs JavaScript in pages at your direction. Equivalent to the DevTools console. Required on all URLs because developers work across many sites.
+- `webRequest` — reads request metadata for passive mode and network debugging. Idle when passive mode is off.
+- `cookies` — reads non-HttpOnly cookies to debug authentication and session state. HttpOnly cookies are inaccessible by Chrome design.
+- `offscreen` — keeps the WebSocket connection alive. Chrome MV3 service workers are killed after ~30s of inactivity; the offscreen document prevents this.
 
 **Consent gate**
 
-On first install, a full onboarding page opens explaining every capability and its risks, including prompt injection. The extension is completely inactive until the user reads the disclosure and explicitly checks a consent checkbox. Consent can be revoked from the popup at any time.
+On first install, a full onboarding page opens explaining every capability and its risks, including prompt injection. The extension is completely inactive until you read the disclosure and explicitly consent. Consent can be revoked from the popup at any time.
 
 **Open source**
 
-Source code available at: https://github.com/DrBenedictPorkins/tethernet
+https://github.com/DrBenedictPorkins/tethernet
 
 ---
 
 ## Screenshots (1280×800 required — 5 recommended)
 
-1. Onboarding consent page — shows the risk disclosure and consent gate
-2. Popup connected state — shows active session, tab status, passive mode toggle
-3. Claude Code terminal running a DOM inspection command with result
-4. Passive Mode report page — domain breakdown, API call analysis
-5. Network capture in action — request/response list with body preview
+1. Onboarding consent page — full risk disclosure and consent gate
+2. Popup connected state — active session, passive mode toggle, entry count
+3. Passive mode report — domain breakdown, slowest calls, beacon classification
+4. Claude Code terminal — network capture showing full response body
+5. Request interception — captured fetch calls with mock endpoint in action
 
 ## Privacy Policy URL
 https://drbenedictporkins.github.io/tethernet/privacy.html
