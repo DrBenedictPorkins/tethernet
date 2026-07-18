@@ -17,8 +17,8 @@ function showMainUI() {
   mainUI.classList.remove('hidden');
 }
 
-chrome.storage.local.get('tetherwebConsent').then(({ tetherwebConsent }) => {
-  if (tetherwebConsent) {
+chrome.storage.local.get('tethernetConsent').then(({ tethernetConsent }) => {
+  if (tethernetConsent) {
     showMainUI();
     initMainUI();
   } else {
@@ -27,8 +27,8 @@ chrome.storage.local.get('tetherwebConsent').then(({ tetherwebConsent }) => {
 });
 
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === 'local' && changes.tetherwebConsent) {
-    if (changes.tetherwebConsent.newValue) {
+  if (area === 'local' && changes.tethernetConsent) {
+    if (changes.tethernetConsent.newValue) {
       showMainUI();
       initMainUI();
     } else {
@@ -43,7 +43,7 @@ openOnboarding.addEventListener('click', () => {
 });
 
 revokeConsentBtn.addEventListener('click', async () => {
-  await chrome.storage.local.remove('tetherwebConsent');
+  await chrome.storage.local.remove('tethernetConsent');
   chrome.runtime.sendMessage({ type: 'disconnect' }).catch(() => {});
   showConsentRequired();
 });
@@ -199,7 +199,7 @@ function initMainUI() {
     }
     serverHostportInput.style.borderColor = '';
     const serverUrl = `ws://${hostport}/extension`;
-    chrome.storage.local.set({ tetherwebServerUrl: serverUrl });
+    chrome.storage.local.set({ tethernetServerUrl: serverUrl });
     chrome.runtime.sendMessage({ type: 'reconnect', serverUrl }).catch(() => {});
     connectBtn.textContent = 'Connecting...';
   }

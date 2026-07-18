@@ -2007,14 +2007,14 @@ chrome.downloads.onChanged.addListener((delta) => {
 
 // --- Init ---
 
-chrome.storage.local.remove('tetherwebServerUrl');
+chrome.storage.local.remove('tethernetServerUrl');
 connectionState = 'disconnected';
 updateIcon();
 updateRecordingIndicator();
 buildRecordingIconCache();
 
-chrome.storage.local.get(['tetherwebConsent', 'tethernetPassiveMode', 'tethernetServerUrl']).then(({ tetherwebConsent, tethernetPassiveMode, tethernetServerUrl }) => {
-  consentGranted = !!tetherwebConsent;
+chrome.storage.local.get(['tethernetConsent', 'tethernetPassiveMode', 'tethernetServerUrl']).then(({ tethernetConsent, tethernetPassiveMode, tethernetServerUrl }) => {
+  consentGranted = !!tethernetConsent;
   console.log(`[Tethernet] Consent: ${consentGranted ? 'granted' : 'not granted'}`);
   if (tethernetPassiveMode) {
     setPassiveMode(true);
@@ -2028,8 +2028,8 @@ chrome.storage.local.get(['tetherwebConsent', 'tethernetPassiveMode', 'tethernet
 });
 
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === 'local' && changes.tetherwebConsent) {
-    consentGranted = !!changes.tetherwebConsent.newValue;
+  if (area === 'local' && changes.tethernetConsent) {
+    consentGranted = !!changes.tethernetConsent.newValue;
     console.log(`[Tethernet] Consent ${consentGranted ? 'granted' : 'revoked'}`);
   }
 });
