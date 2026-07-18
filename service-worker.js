@@ -2007,7 +2007,6 @@ chrome.downloads.onChanged.addListener((delta) => {
 
 // --- Init ---
 
-chrome.storage.local.remove('tethernetServerUrl');
 connectionState = 'disconnected';
 updateIcon();
 updateRecordingIndicator();
