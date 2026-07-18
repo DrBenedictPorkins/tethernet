@@ -1803,10 +1803,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     connectedAt = null;
     sessionInfo = null;
     updateIcon();
-    // Auto-reconnect if we still have a server URL (don't clear it — SW restart loses in-memory state)
-    if (SERVER_URL) {
-      setTimeout(() => connect(), 3000);
-    }
     return false;
   }
 
