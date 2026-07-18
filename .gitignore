@@ -3,7 +3,8 @@
 builds/
 .worktrees/
 
-# Leftover scratch files
-nextdoor-*.html
-nextdoor-*.md
-generate_report.py
+# Internal — not for public repo
+CLAUDE.md
+SUBMISSION_NOTES.md
+store/
+scripts/
