@@ -547,8 +547,14 @@ async function handleTakeScreenshot(params) {
   if (captureFormat === 'jpeg') options.quality = captureQuality;
 
   const tab = await chrome.tabs.get(tabId);
+
+  const restricted = /^(chrome|chrome-extension|chrome-untrusted|devtools|about|data):/.test(tab.url)
+    || tab.url.startsWith('https://chromewebstore.google.com');
+  if (restricted) throw new Error(`Cannot screenshot restricted URL: ${tab.url}`);
+
   await chrome.tabs.update(tabId, { active: true });
   await chrome.windows.update(tab.windowId, { focused: true });
+  await new Promise(r => setTimeout(r, 150));
 
   const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, options);
 
