@@ -68,6 +68,12 @@
   something the worker does not do. Only an explicit off disables it, from the toggle beside
   Passive Mode.
 
+- **Notes only arrived when the session drove the tab.** Delivery hung off the extension's
+  `navigate` action, so a user already sitting on the site — the more common way work starts
+  — got nothing, and neither did a page they reloaded themselves. Any command naming a tab
+  now checks that tab's domain, with an in-memory set so a domain already handled this worker
+  life costs nothing and `chrome.storage.session` stays the authority on what was delivered.
+
 - **Site notes are delivered, not just counted.** Detector 2 previously said only whether a
   domain had notes — the caller still had to remember to fetch them, which is the same
   forgetting problem the detectors exist to solve. On the first navigation to a domain the

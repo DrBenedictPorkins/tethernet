@@ -252,6 +252,11 @@ const INTERACTION_ACTIONS = new Set([
 const NOTES_PAYLOAD_LIMIT = 8000;
 let pendingNotes = null;            // a domain's notes, delivered once per worker life
 
+// Domains already looked at this worker life, so the common case — a command against a
+// tab whose notes were handled long ago — costs nothing. storage.session stays the
+// authority for what was actually delivered.
+const checkedThisWorker = new Set();
+
 const recentFailures = new Map();   // `${tabId}|${selector}` -> { action, t }
 // Delivery is deduped in chrome.storage.session, not memory: MV3 kills this worker after
 // ~30s idle, and an in-memory Set meant the whole payload was re-sent after every idle gap.
@@ -404,8 +409,22 @@ function attachHints(action, result) {
 // --- Command handlers ---
 
 async function handleServerCommand(action, params) {
+  // Any command naming a tab is a chance to notice its domain. Hooking only the
+  // navigate action meant notes arrived when the session drove the tab and never when
+  // the user was already on the site, which is the more common way work starts.
+  if (params && params.tabId != null) await noteTabDomain(params.tabId);
   const result = await routeServerCommand(action, params);
   return attachHints(action, result);
+}
+
+async function noteTabDomain(tabId) {
+  try {
+    const tab = await chrome.tabs.get(Number(tabId));
+    const domain = domainOf(tab && tab.url);
+    if (!domain || checkedThisWorker.has(domain)) return;
+    checkedThisWorker.add(domain);
+    await noteDomainCoverage(tab.url);
+  } catch (_) { /* tab gone, or a URL we cannot parse */ }
 }
 
 async function routeServerCommand(action, params) {
