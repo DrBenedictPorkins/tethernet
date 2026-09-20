@@ -170,11 +170,6 @@ function updateRecordingIndicator() {
 
 function updateTabBadge(tabId) {
   if (contentScriptTabs.has(tabId)) {
-    if (hintAskPending && !networkCapture.active) {
-      chrome.action.setBadgeText({ text: '?', tabId }).catch(() => {});
-      chrome.action.setBadgeBackgroundColor({ color: '#00E5D0', tabId }).catch(() => {});
-      return;
-    }
     chrome.action.setBadgeText({ text: '', tabId }).catch(() => {});
   } else {
     chrome.action.setBadgeText({ text: '!', tabId }).catch(() => {});
@@ -227,64 +222,24 @@ const HINT_MAX = 5;
 const INTERACTION_FAIL_TTL_MS = 120000;
 let pendingHints = [];
 
-// 'ask' | 'on' | 'off'. Defaults to 'ask': nothing is ever injected into the user's
-// conversation until they have said yes once. In 'ask', a detector that fires holds
-// its hint and raises the badge instead — the extension cannot interrupt a tool call,
-// so the question waits in the popup rather than pretending to prompt.
-let hintsMode = 'ask';
-let hintAskPending = false;
-let hintsAllowOnce = false;  // Yes, without "don't ask me again" — this batch only
+// One switch, decided at install. Note reminders mean the extension is feeding
+// observations to an AI session, and that is a yes/no the user makes once —
+// not a prompt that interrupts them later. Absent key means off, so an existing
+// install that never saw the onboarding question stays silent until asked for.
+let hintsEnabled = false;
 
 chrome.storage.local.get('tethernetHintsMode')
-  .then(({ tethernetHintsMode }) => {
-    if (tethernetHintsMode === 'on' || tethernetHintsMode === 'off') hintsMode = tethernetHintsMode;
-  })
-  .catch(() => {});
+  .then(({ tethernetHintsMode }) => { hintsEnabled = tethernetHintsMode === 'on'; })
+  .catch(() => { hintsEnabled = false; });
 
-function setHintsMode(mode) {
-  hintsMode = mode;
-  chrome.storage.local.set({ tethernetHintsMode: mode });
-  if (mode !== 'ask') hintAskPending = false;
-  if (mode === 'off') pendingHints = [];
-  updateHintBadge();
-  broadcastHintState();
-}
-
-// Yes / No answer the pending batch. "Don't ask me again" is what makes the answer
-// permanent — without it the next batch asks again, which is what "ask" means.
-function answerHintAsk(allow, remember) {
-  if (remember) {
-    setHintsMode(allow ? 'on' : 'off');
-    if (allow) hintsAllowOnce = true;
-    return;
-  }
-  if (allow) hintsAllowOnce = true;
-  else pendingHints = [];
-  hintAskPending = false;
-  updateHintBadge();
-  broadcastHintState();
-}
-
-function broadcastHintState() {
+function setHintsEnabled(on) {
+  hintsEnabled = !!on;
+  chrome.storage.local.set({ tethernetHintsMode: hintsEnabled ? 'on' : 'off' });
+  if (!hintsEnabled) pendingHints = [];
   chrome.runtime.sendMessage({
     type: 'hints_state_changed',
-    mode: hintsMode,
-    pending: hintAskPending,
-    queued: pendingHints.length,
+    enabled: hintsEnabled,
   }).catch(() => {});
-}
-
-function updateHintBadge() {
-  if (networkCapture.active) return; // a live capture owns the badge
-  if (hintAskPending) {
-    chrome.action.setBadgeText({ text: '?' }).catch(() => {});
-    chrome.action.setBadgeBackgroundColor({ color: '#00E5D0' }).catch(() => {});
-  } else {
-    chrome.action.setBadgeText({ text: '' }).catch(() => {});
-  }
-  // Per-tab badges take precedence over the global one, so repaint the tabs that
-  // already have one or the '?' is invisible on every tab Tethernet has seen.
-  for (const tabId of contentScriptTabs) updateTabBadge(tabId);
 }
 
 // Only actions whose result object reaches the caller intact can carry a hint.
@@ -305,15 +260,10 @@ const hintedDomains = new Set();    // one no-notes hint per domain per worker l
 let lastSiteNoteWriteAt = 0;
 
 function queueHint(text) {
-  if (hintsMode === 'off') return;
+  if (!hintsEnabled) return;
   if (pendingHints.includes(text)) return;
   pendingHints.push(text);
   if (pendingHints.length > HINT_MAX) pendingHints.shift();
-  if (hintsMode === 'ask' && !hintAskPending) {
-    hintAskPending = true;
-    updateHintBadge();
-    broadcastHintState();
-  }
 }
 
 function domainOf(url) {
@@ -382,9 +332,8 @@ function noteCaptureYield() {
 }
 
 function attachHints(action, result) {
-  if (hintsMode !== 'on' && !hintsAllowOnce) return result;  // 'ask' holds the queue
+  if (!hintsEnabled) return result;
   if (!pendingHints.length || !HINT_CARRIERS.has(action)) return result;
-  hintsAllowOnce = false;
   if (result === null || typeof result !== 'object' || Array.isArray(result)) return result;
   const hints = pendingHints;
   pendingHints = [];
@@ -2258,19 +2207,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'popup_get_hints_mode') {
-    sendResponse({ mode: hintsMode, pending: hintAskPending, queued: pendingHints.length });
+    sendResponse({ enabled: hintsEnabled });
     return false;
   }
 
   if (message.type === 'popup_set_hints_mode') {
-    setHintsMode(message.mode === 'on' ? 'on' : message.mode === 'off' ? 'off' : 'ask');
-    sendResponse({ ok: true, mode: hintsMode });
-    return false;
-  }
-
-  if (message.type === 'popup_answer_hint_ask') {
-    answerHintAsk(!!message.allow, !!message.remember);
-    sendResponse({ ok: true, mode: hintsMode });
+    setHintsEnabled(message.mode === 'on');
+    sendResponse({ ok: true, enabled: hintsEnabled });
     return false;
   }
 

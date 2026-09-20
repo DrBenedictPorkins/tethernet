@@ -60,19 +60,11 @@
   Hints are earned, never periodic. One that fires when nothing happened teaches the reader
   to skip hints, which costs more than it saves.
 
-  Default is `ask`: nothing reaches the conversation until the user says yes once. A queued
-  hint raises a `?` badge and waits in the popup, because the extension cannot interrupt a
-  tool call and should not pretend to. Yes/No answer the batch, "Don't ask me again" makes
-  the answer permanent, and a toggle beside Passive Mode keeps it reversible either way.
-  Installs decide at onboarding rather than leaving the choice buried in a panel nobody opens.
-
-- **`take_screenshot({ fullPage: true })` now captures the full page.** The parameter was
-  declared in the schema, forwarded, and never read — `captureVisibleTab` is viewport-only,
-  so `fullPage` silently returned a viewport shot. Added scroll-and-stitch: `position:fixed`
-  and `sticky` elements are hidden after the first slice so a sticky header does not repeat
-  down the image, scroll position and visibility are restored in a `finally`, slices are
-  spaced to stay inside Chrome's capture quota with one backoff retry, and pages beyond the
-  `OffscreenCanvas` limit report `truncated` instead of silently losing the tail.
+  This is a single yes/no, chosen during onboarding, because it means feeding observations
+  to an AI session and that is the user's call to make once — not a prompt that interrupts
+  them later. There is no per-event asking: an earlier cut queued hints behind a toolbar
+  badge, which nobody watching a terminal would ever notice. An install that predates the
+  question stays off until switched on in the popup, beside Passive Mode.
 
 ### Internal
 - `scripts/audit-tool-surface.mjs` cross-references tool schemas, MCP handlers and both
