@@ -1,0 +1,9 @@
+# Kept in the repo, never shipped in a `git archive` package. The Chrome Web Store zip
+# is built with `git archive` from a tag, so this is the single place that decides what
+# ships — a stray file on disk cannot leak in, and there is no exclude list in the
+# release script to fall out of date.
+CLAUDE.md       export-ignore
+test/           export-ignore
+CHANGELOG.md    export-ignore
+.gitattributes  export-ignore
+.gitignore      export-ignore
