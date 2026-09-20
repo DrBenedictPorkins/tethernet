@@ -6,6 +6,7 @@
 
 let ws = null;
 let pendingUrl = null;
+let lastSessionInfo = null;
 let keepAliveTimer = null;
 let reconnectTimer = null;
 let reconnectDelay = 2000;
@@ -18,6 +19,17 @@ function connect(serverUrl) {
       ws.onerror = null;
       ws.close();
     } else {
+      // The socket is already live on this URL. The service worker asking again means
+      // it restarted underneath us — MV3 kills it after ~30s idle — and came back
+      // believing it was still connecting. Returning silently left it stuck on
+      // "CONNECTING" with no session, while commands kept flowing over this socket.
+      // Re-announce the state it missed.
+      if (ws.readyState === WebSocket.OPEN) {
+        chrome.runtime.sendMessage({ type: 'ws_open' }).catch(() => {});
+        if (lastSessionInfo) {
+          chrome.runtime.sendMessage({ type: 'session_info', data: lastSessionInfo }).catch(() => {});
+        }
+      }
       return;
     }
   }
@@ -40,6 +52,9 @@ function connect(serverUrl) {
         const message = JSON.parse(event.data);
 
         if (message.type === 'session_info') {
+          // Cached so a restarted worker can be told who it is talking to; the server
+          // only sends this once, at handshake.
+          lastSessionInfo = message.data;
           chrome.runtime.sendMessage({ type: 'session_info', data: message.data }).catch(() => {});
           return;
         }
@@ -63,6 +78,7 @@ function connect(serverUrl) {
     ws.onclose = () => {
       console.log('[Tethernet/offscreen] WebSocket closed, reconnecting in', reconnectDelay, 'ms');
       ws = null;
+      lastSessionInfo = null;
       chrome.runtime.sendMessage({ type: 'ws_closed' }).catch(() => {});
       // Auto-reconnect with exponential backoff
       reconnectTimer = setTimeout(() => {
@@ -79,6 +95,7 @@ function connect(serverUrl) {
 
 function disconnect() {
   pendingUrl = null;
+  lastSessionInfo = null;
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   if (ws) {
     ws.onclose = null;

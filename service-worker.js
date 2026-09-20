@@ -242,14 +242,6 @@ function setHintsEnabled(on) {
   }).catch(() => {});
 }
 
-// Only actions whose result object reaches the caller intact can carry a hint.
-// Handlers that build their own success payload (click_element, navigate, ...)
-// would silently drop it, so the queue waits for one of these instead.
-const HINT_CARRIERS = new Set([
-  'execute_script', 'get_capture', 'stop_network_capture', 'capture_network',
-  'find_elements', 'get_accessibility_tree', 'get_ref', 'storage_get', 'storage_list',
-]);
-
 const INTERACTION_ACTIONS = new Set([
   'click_element', 'type_text', 'press_key', 'hover_element', 'focus_element',
   'select_option', 'set_checkbox', 'scroll_to_element', 'get_ref',
@@ -259,10 +251,13 @@ const NOTES_PAYLOAD_LIMIT = 8000;
 let pendingNotes = null;            // a domain's notes, delivered once per worker life
 
 const recentFailures = new Map();   // `${tabId}|${selector}` -> { action, t }
-// Delivery is deduped in chrome.storage.session, not memory. MV3 kills this worker
-// after ~30s idle, so an in-memory Set meant the whole notes payload was re-sent after
-// every idle gap — once per browser session is the intent, not once per worker life.
-// storage.session clears when the browser session ends, which is the right lifetime.
+// Delivery is deduped in chrome.storage.session, not memory: MV3 kills this worker after
+// ~30s idle, and an in-memory Set meant the whole payload was re-sent after every idle gap.
+//
+// The scope that matters is the MCP session, not the browser. A second session
+// connecting to the same browser has never seen these notes, so the set is cleared when
+// the server reports a new session PID — not on ws_open, which also fires for reconnects
+// after a dropped socket or a worker restart, where the session still holds its notes.
 const NOTES_SENT_KEY = '__tethernet_notes_sent__';
 
 async function alreadyDelivered(domain) {
@@ -270,6 +265,20 @@ async function alreadyDelivered(domain) {
     const got = await chrome.storage.session.get(NOTES_SENT_KEY);
     return (got[NOTES_SENT_KEY] || []).includes(domain);
   } catch (_) { return false; }
+}
+
+const NOTES_PID_KEY = '__tethernet_notes_pid__';
+
+// The PID has to be persisted too: sessionInfo lives in memory, and the worker dies every
+// ~30s idle, so comparing against it would make every session look new after any pause.
+async function onSessionPid(pid) {
+  if (pid == null) return;
+  try {
+    const got = await chrome.storage.session.get(NOTES_PID_KEY);
+    if (got[NOTES_PID_KEY] === pid) return;
+    await chrome.storage.session.set({ [NOTES_PID_KEY]: pid });
+    await chrome.storage.session.remove(NOTES_SENT_KEY);
+  } catch (_) { /* worst case a session is sent its notes twice */ }
 }
 
 async function markDelivered(domain) {
@@ -376,9 +385,11 @@ function noteCaptureYield() {
   );
 }
 
+// The MCP layer strips these off whatever the extension returns and appends them to
+// the outgoing tool result, so any action can carry them — it no longer matters that
+// most tools reshape their payload and would otherwise discard the wrapper.
 function attachHints(action, result) {
   if (!hintsEnabled) return result;
-  if (!HINT_CARRIERS.has(action)) return result;
   if (result === null || typeof result !== 'object' || Array.isArray(result)) return result;
   if (!pendingHints.length && !pendingNotes) return result;
 
@@ -2140,6 +2151,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === 'session_info') {
     sessionInfo = message.data;
+    // A different PID is a different session, holding none of what the last one was
+    // sent. A reconnect from the same session keeps its delivery record.
+    if (sessionInfo) onSessionPid(sessionInfo.pid);
     console.log('[Tethernet] Session info received:', sessionInfo.projectName, 'PID:', sessionInfo.pid);
     chrome.runtime.sendMessage({ type: 'session_info_updated', sessionInfo }).catch(() => {});
     return false;

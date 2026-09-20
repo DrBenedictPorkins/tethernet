@@ -86,6 +86,30 @@
   away a prior that is usually still right. Records written in an older freeform shape render
   as raw JSON instead of being skipped, so the report cannot understate coverage.
 
+- **Popup showed CONNECTING while commands were executing.** The socket lives in the
+  offscreen document, which outlives the service worker. MV3 kills the worker after ~30s
+  idle; on restart it reset its state to `connecting` and asked offscreen to connect again,
+  but `connect()` returned silently when the socket was already open on that URL. The worker
+  never learned it was connected, and `session_info` is only sent once at handshake, so the
+  popup also showed no session — while commands kept flowing, because they are forwarded
+  independently of that state. Offscreen now re-announces `ws_open` and replays the cached
+  `session_info` when a restarted worker asks again.
+
+- **Site notes were attached and then discarded.** Delivery was gated on an allowlist of
+  extension actions, but whether the payload survives depends on the MCP *tool*, not the
+  action: `get_page_text`, `dom_stats`, `get_dom_structure`, `get_element` and the `wait_for_*`
+  family all ride `execute_script` and all reshape its result, dropping anything on the
+  wrapper. A fresh session with two records stored for the domain received nothing. The MCP
+  server now strips the sideband off every extension result and appends it to whatever the
+  tool returns, so the allowlist is gone and any action can carry.
+
+- **Notes delivery is scoped to the MCP session, not the browser.** The dedupe set lived in
+  `chrome.storage.session` keyed to nothing in particular, so a second session connecting to
+  the same browser — which has never seen those notes — received none. It is now cleared when
+  the server reports a new session PID. Not on `ws_open`, which also fires for reconnects
+  after a dropped socket or a worker restart, where the session still holds what it was sent;
+  and the PID is persisted, since the worker dying would otherwise make every session look new.
+
 ### Internal
 - `scripts/audit-tool-surface.mjs` cross-references tool schemas, MCP handlers and both
   extensions in each direction: declared-but-never-read parameters, forwarding gaps, action
