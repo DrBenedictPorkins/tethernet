@@ -1057,6 +1057,7 @@ const networkCapture = {
   urlFilter: '',
   methodFilter: '',
   maxEntries: DEFAULT_MAX_ENTRIES,
+  budgetUsed: 0,
   maxBodySize: 4000,
   entries: [],
   ceilingTimer: null,
@@ -1197,6 +1198,7 @@ function getCaptureState() {
     methodFilter: networkCapture.methodFilter,
     maxEntries: networkCapture.maxEntries,
     count: networkCapture.entries.length,
+    countedTowardMax: networkCapture.budgetUsed,
     debuggerUsed: networkCapture.debuggerAttached || networkCapture.debuggerWasUsed || false,
   };
 }
@@ -1228,13 +1230,37 @@ function cdpHeadersToList(headers) {
   return truncateHeaderList(Object.entries(headers).map(([name, value]) => ({ name, value: String(value) })));
 }
 
+// CDP hands us a resource type per request, which is far more reliable than sniffing the
+// URL. Static assets still get captured — they are real traffic — but they no longer eat
+// the entry budget, which is what made a small capture useless: 25 entries on a retail
+// homepage came back as 25 stylesheets, fonts and scripts with not one API call in them.
+const ASSET_TYPES = new Set(['Stylesheet', 'Image', 'Media', 'Font', 'Script', 'TextTrack']);
+const ASSET_PATH_RE = /\.(css|png|jpe?g|gif|webp|avif|svg|ico|woff2?|ttf|otf|eot|mp4|webm|m4s|ts)(\?|$)/i;
+
+function isStaticAsset(entry) {
+  if (entry.type && ASSET_TYPES.has(entry.type)) return true;
+  if (!entry.type) {
+    try { return ASSET_PATH_RE.test(new URL(entry.url).pathname); } catch (_) { return false; }
+  }
+  return false;
+}
+
+function countsTowardBudget(entry) {
+  return !isStaticAsset(entry);
+}
+
 function finalizeEntry(entry) {
   if (!entry || entry.__done) return;
   entry.__done = true;
   delete entry.__done;
   networkCapture.entries.push(entry);
+  if (countsTowardBudget(entry)) networkCapture.budgetUsed++;
   broadcastCaptureState();
-  if (networkCapture.active && networkCapture.entries.length >= networkCapture.maxEntries) {
+  if (!networkCapture.active) return;
+  // Stop on the budget of non-asset entries, or on a hard cap so an asset-heavy page
+  // cannot grow the buffer without bound.
+  if (networkCapture.budgetUsed >= networkCapture.maxEntries
+      || networkCapture.entries.length >= MAX_ENTRIES_HARD_CAP) {
     stopCapture('threshold');
   }
 }
@@ -1361,6 +1387,7 @@ async function startCapture(params = {}) {
   networkCapture.urlFilter = params.urlFilter || '';
   networkCapture.methodFilter = params.methodFilter || '';
   networkCapture.maxEntries = maxEntries;
+  networkCapture.budgetUsed = 0;
   networkCapture.maxBodySize = params.maxBodySize || 4000;
   networkCapture.entries = [];
   networkCapture.debuggerAttached = false;
@@ -1435,6 +1462,8 @@ function captureMetadata() {
     methodFilter: networkCapture.methodFilter,
     maxEntries: networkCapture.maxEntries,
     count: networkCapture.entries.length,
+    countedTowardMax: networkCapture.budgetUsed,
+    staticAssets: networkCapture.entries.length - networkCapture.budgetUsed,
     debuggerUsed: networkCapture.debuggerAttached || networkCapture.debuggerWasUsed || false,
   };
 }

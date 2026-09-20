@@ -68,6 +68,16 @@
   something the worker does not do. Only an explicit off disables it, from the toggle beside
   Passive Mode.
 
+- **`maxEntries` counted page furniture.** The threshold counted every entry, so a small
+  capture filled with stylesheets, fonts and scripts before any API call arrived — 25 entries
+  on the Best Buy homepage came back as 25 assets and one document, with nothing to audit.
+  Only non-asset entries count now, classified by the CDP resource type rather than by
+  sniffing the URL. Assets are still captured, since they are real traffic; they just do not
+  spend the budget, and a 500-entry hard cap stops an asset-heavy page growing the buffer
+  without bound. The same 25-entry capture now returns 163 entries — 25 counted, 138 assets —
+  with the GraphQL traffic in it. `countedTowardMax` and `staticAssets` are exposed in the
+  capture metadata.
+
 - **Notes only arrived when the session drove the tab.** Delivery hung off the extension's
   `navigate` action, so a user already sitting on the site — the more common way work starts
   — got nothing, and neither did a page they reloaded themselves. Any command naming a tab
