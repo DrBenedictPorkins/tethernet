@@ -654,3 +654,27 @@ body {
 .passive-report-btn:hover {
   background: rgba(0, 229, 208, 0.06);
 }
+
+.hints-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.hints-actions .passive-report-btn {
+  margin-top: 0;
+}
+
+.hints-remember {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 11px;
+  color: #555;
+  cursor: pointer;
+}
+
+.hints-remember input {
+  accent-color: #00E5D0;
+}

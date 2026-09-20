@@ -23,6 +23,15 @@
   records no bodies, and it never joined two id spaces, so it never had this bug. Moving it
   would mean holding the debugger attached to every tab permanently.
 
+- **Commands were refused with "not enabled" after the worker went idle.** `consentGranted`
+  initialises to `false` and was only set inside an async storage read. MV3 terminates the
+  service worker after ~30s idle, so a command that woke it could reach the consent gate
+  before that read resolved and be refused — telling the user to grant consent they had
+  already granted, which is an instruction that cannot change the outcome. The gate now
+  awaits the stored value. It still never defaults to granted: the read resolves to the
+  stored flag and a failed read leaves it `false`. The duplicate read in the init block was
+  removed so a revoke landing between the two reads cannot be clobbered by a stale snapshot.
+
 - **Failures were reported as successes.** Handlers that returned `{error}` as a resolved
   value put the message in the envelope's `result` slot, so the MCP layer rendered a failed
   call as a success. Now thrown: `list_frames`, `startCapture`, `capture_network`,
@@ -38,6 +47,25 @@
   still run once per page rather than once per iframe.
 
 ### Added
+- **Note reminders.** Site notes only get written when someone remembers to write them,
+  and an instruction to remember is not a mechanism. Three detectors fire on facts the
+  extension can observe directly, queue a short line, and ride it out on the next response
+  the MCP layer passes through untouched — no extra round trip:
+  - an interaction failed on a selector and a later one succeeded on the same selector,
+    which is the workaround worth recording and can only be learned by failing first;
+  - a navigation to a domain with no `site:<domain>` key, once per domain;
+  - a capture that yielded five or more distinct non-asset endpoints with nothing recorded
+    since it started.
+
+  Hints are earned, never periodic. One that fires when nothing happened teaches the reader
+  to skip hints, which costs more than it saves.
+
+  Default is `ask`: nothing reaches the conversation until the user says yes once. A queued
+  hint raises a `?` badge and waits in the popup, because the extension cannot interrupt a
+  tool call and should not pretend to. Yes/No answer the batch, "Don't ask me again" makes
+  the answer permanent, and a toggle beside Passive Mode keeps it reversible either way.
+  Installs decide at onboarding rather than leaving the choice buried in a panel nobody opens.
+
 - **`take_screenshot({ fullPage: true })` now captures the full page.** The parameter was
   declared in the schema, forwarded, and never read — `captureVisibleTab` is viewport-only,
   so `fullPage` silently returned a viewport shot. Added scroll-and-stitch: `position:fixed`

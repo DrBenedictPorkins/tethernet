@@ -70,6 +70,13 @@ function initMainUI() {
   const passiveToggle = document.getElementById('passive-toggle');
   const passiveCount = document.getElementById('passive-count');
   const passiveReportBtn = document.getElementById('passive-report-btn');
+  const hintsSection = document.getElementById('hints-section');
+  const hintsState = document.getElementById('hints-state');
+  const hintsToggle = document.getElementById('hints-toggle');
+  const hintsQuestion = document.getElementById('hints-question');
+  const hintsRemember = document.getElementById('hints-remember');
+  const hintsYes = document.getElementById('hints-yes');
+  const hintsNo = document.getElementById('hints-no');
 
   let connectedAt = null;
   let updateTimer = null;
@@ -227,6 +234,50 @@ function initMainUI() {
       }
     })
     .catch(() => {});
+
+  // The section only appears when there is something to answer, or to report a
+  // standing choice. Nothing is asked when no detector has fired.
+  // The toggle is always present so the setting is reversible at any time. The
+  // Yes/No prompt is additional, shown only while an answer is outstanding.
+  function renderHints(state) {
+    if (!state) return;
+    const asking = state.pending && state.mode === 'ask';
+    hintsToggle.checked = state.mode === 'on';
+    hintsQuestion.classList.toggle('hidden', !asking);
+    hintsRemember.classList.toggle('hidden', !asking);
+    hintsYes.classList.toggle('hidden', !asking);
+    hintsNo.classList.toggle('hidden', !asking);
+    hintsState.textContent = asking
+      ? (state.queued ? `${state.queued} waiting` : 'waiting')
+      : (state.mode === 'ask' ? 'ask' : '');
+  }
+
+  hintsToggle.addEventListener('change', () => {
+    chrome.runtime.sendMessage({
+      type: 'popup_set_hints_mode',
+      mode: hintsToggle.checked ? 'on' : 'off',
+    }).catch(() => {});
+    chrome.runtime.sendMessage({ type: 'popup_get_hints_mode' }).then(renderHints).catch(() => {});
+  });
+
+  function answerHints(allow) {
+    chrome.runtime.sendMessage({
+      type: 'popup_answer_hint_ask',
+      allow,
+      remember: hintsRemember.checked,
+    }).catch(() => {});
+    hintsRemember.checked = false;
+    chrome.runtime.sendMessage({ type: 'popup_get_hints_mode' }).then(renderHints).catch(() => {});
+  }
+
+  hintsYes.addEventListener('click', () => answerHints(true));
+  hintsNo.addEventListener('click', () => answerHints(false));
+
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg.type === 'hints_state_changed') renderHints(msg);
+  });
+
+  chrome.runtime.sendMessage({ type: 'popup_get_hints_mode' }).then(renderHints).catch(() => {});
 
   passiveToggle.addEventListener('change', () => {
     chrome.runtime.sendMessage({ type: 'popup_set_passive_mode', enabled: passiveToggle.checked }).catch(() => {});

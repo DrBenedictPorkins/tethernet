@@ -163,6 +163,14 @@
         <span>I understand the risks, accept full responsibility for how I use this tool, and consent to Tethernet connecting my browser to my local Claude Code session.</span>
       </label>
 
+      <label class="checkbox-label">
+        <input type="checkbox" id="hints-checkbox" checked>
+        <span>Let Tethernet flag things worth noting. When a selector fails and another
+        approach works, or a page's API traffic goes unrecorded, it adds a short line to
+        a response Claude is already reading so the finding can be saved for next time.
+        Costs a few tokens; off means Claude is never told.</span>
+      </label>
+
       <button id="enable-btn" class="enable-btn" disabled>Enable Tethernet</button>
       <p class="revoke-note">You can revoke consent and disconnect at any time from the extension popup.</p>
     </div>

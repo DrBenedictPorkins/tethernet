@@ -10,6 +10,16 @@ let connectedAt = null;
 let sessionInfo = null;
 let consentGranted = false;
 
+// MV3 terminates this worker after ~30s idle and revives it on the next message.
+// The consent flag is restored from storage asynchronously, so a command that wakes
+// the worker can reach the gate before that read resolves and be refused with
+// "not enabled" even though consent was granted. The gate awaits this promise
+// instead of reading the `false` the flag was initialised with. It resolves to the
+// stored value and never defaults to granted.
+const consentReady = chrome.storage.local.get('tethernetConsent')
+  .then(({ tethernetConsent }) => { consentGranted = !!tethernetConsent; })
+  .catch(() => { consentGranted = false; });
+
 const contentScriptTabs = new Set();
 
 // --- Offscreen document management ---
@@ -160,6 +170,11 @@ function updateRecordingIndicator() {
 
 function updateTabBadge(tabId) {
   if (contentScriptTabs.has(tabId)) {
+    if (hintAskPending && !networkCapture.active) {
+      chrome.action.setBadgeText({ text: '?', tabId }).catch(() => {});
+      chrome.action.setBadgeBackgroundColor({ color: '#00E5D0', tabId }).catch(() => {});
+      return;
+    }
     chrome.action.setBadgeText({ text: '', tabId }).catch(() => {});
   } else {
     chrome.action.setBadgeText({ text: '!', tabId }).catch(() => {});
@@ -198,9 +213,192 @@ async function sendTabList() {
   }
 }
 
+// --- Note hints ---
+// Site notes are only written when someone remembers to write them, and an
+// instruction to remember is not a mechanism. These detectors fire on facts the
+// extension can observe directly, queue a hint, and ride it out on the next
+// response that the MCP layer passes through untouched.
+//
+// Hints are earned, never periodic: each one names what happened and what is
+// unrecorded. A hint that fires when nothing happened teaches the reader to skip
+// hints, which costs more than it saves.
+
+const HINT_MAX = 5;
+const INTERACTION_FAIL_TTL_MS = 120000;
+let pendingHints = [];
+
+// 'ask' | 'on' | 'off'. Defaults to 'ask': nothing is ever injected into the user's
+// conversation until they have said yes once. In 'ask', a detector that fires holds
+// its hint and raises the badge instead — the extension cannot interrupt a tool call,
+// so the question waits in the popup rather than pretending to prompt.
+let hintsMode = 'ask';
+let hintAskPending = false;
+let hintsAllowOnce = false;  // Yes, without "don't ask me again" — this batch only
+
+chrome.storage.local.get('tethernetHintsMode')
+  .then(({ tethernetHintsMode }) => {
+    if (tethernetHintsMode === 'on' || tethernetHintsMode === 'off') hintsMode = tethernetHintsMode;
+  })
+  .catch(() => {});
+
+function setHintsMode(mode) {
+  hintsMode = mode;
+  chrome.storage.local.set({ tethernetHintsMode: mode });
+  if (mode !== 'ask') hintAskPending = false;
+  if (mode === 'off') pendingHints = [];
+  updateHintBadge();
+  broadcastHintState();
+}
+
+// Yes / No answer the pending batch. "Don't ask me again" is what makes the answer
+// permanent — without it the next batch asks again, which is what "ask" means.
+function answerHintAsk(allow, remember) {
+  if (remember) {
+    setHintsMode(allow ? 'on' : 'off');
+    if (allow) hintsAllowOnce = true;
+    return;
+  }
+  if (allow) hintsAllowOnce = true;
+  else pendingHints = [];
+  hintAskPending = false;
+  updateHintBadge();
+  broadcastHintState();
+}
+
+function broadcastHintState() {
+  chrome.runtime.sendMessage({
+    type: 'hints_state_changed',
+    mode: hintsMode,
+    pending: hintAskPending,
+    queued: pendingHints.length,
+  }).catch(() => {});
+}
+
+function updateHintBadge() {
+  if (networkCapture.active) return; // a live capture owns the badge
+  if (hintAskPending) {
+    chrome.action.setBadgeText({ text: '?' }).catch(() => {});
+    chrome.action.setBadgeBackgroundColor({ color: '#00E5D0' }).catch(() => {});
+  } else {
+    chrome.action.setBadgeText({ text: '' }).catch(() => {});
+  }
+  // Per-tab badges take precedence over the global one, so repaint the tabs that
+  // already have one or the '?' is invisible on every tab Tethernet has seen.
+  for (const tabId of contentScriptTabs) updateTabBadge(tabId);
+}
+
+// Only actions whose result object reaches the caller intact can carry a hint.
+// Handlers that build their own success payload (click_element, navigate, ...)
+// would silently drop it, so the queue waits for one of these instead.
+const HINT_CARRIERS = new Set([
+  'execute_script', 'get_capture', 'stop_network_capture', 'capture_network',
+  'find_elements', 'get_accessibility_tree', 'get_ref', 'storage_get', 'storage_list',
+]);
+
+const INTERACTION_ACTIONS = new Set([
+  'click_element', 'type_text', 'press_key', 'hover_element', 'focus_element',
+  'select_option', 'set_checkbox', 'scroll_to_element', 'get_ref',
+]);
+
+const recentFailures = new Map();   // `${tabId}|${selector}` -> { action, t }
+const hintedDomains = new Set();    // one no-notes hint per domain per worker life
+let lastSiteNoteWriteAt = 0;
+
+function queueHint(text) {
+  if (hintsMode === 'off') return;
+  if (pendingHints.includes(text)) return;
+  pendingHints.push(text);
+  if (pendingHints.length > HINT_MAX) pendingHints.shift();
+  if (hintsMode === 'ask' && !hintAskPending) {
+    hintAskPending = true;
+    updateHintBadge();
+    broadcastHintState();
+  }
+}
+
+function domainOf(url) {
+  try { return new URL(url).hostname.replace(/^www\./, ''); } catch (_) { return null; }
+}
+
+// Detector 1 — an interaction failed on a selector and a later one succeeded on the
+// same selector. That difference is the workaround, and it is the thing worth writing
+// down: it can only be learned by failing first.
+function noteInteractionOutcome(action, params, result) {
+  if (!INTERACTION_ACTIONS.has(action)) return;
+  const selector = params && params.selector;
+  if (!selector) return;
+  const key = `${params.tabId}|${selector}`;
+  const failed = result && typeof result === 'object' && typeof result.error === 'string';
+
+  if (failed) {
+    recentFailures.set(key, { action, t: Date.now() });
+    return;
+  }
+
+  const prior = recentFailures.get(key);
+  if (!prior) return;
+  recentFailures.delete(key);
+  if (Date.now() - prior.t > INTERACTION_FAIL_TTL_MS) return;
+
+  const how = prior.action === action
+    ? `${action} failed on ${selector}, then succeeded on retry`
+    : `${prior.action} failed on ${selector}, ${action} succeeded`;
+  queueHint(`${how} — that is a site workaround and nothing is recorded for it.`);
+}
+
+// Detector 2 — working on a domain with no notes at all.
+async function noteDomainCoverage(url) {
+  const domain = domainOf(url);
+  if (!domain || hintedDomains.has(domain)) return;
+  hintedDomains.add(domain);
+  try {
+    const key = 'site:' + domain;
+    const got = await chrome.storage.local.get(key);
+    if (got[key] == null) queueHint(`No site notes exist for ${domain}.`);
+  } catch (_) { /* storage unavailable — say nothing rather than guess */ }
+}
+
+// Detector 3 — a capture produced distinct endpoints and none of it was written down.
+function noteCaptureYield() {
+  const entries = networkCapture.entries || [];
+  if (entries.length === 0) return;
+  const hosts = new Set();
+  const endpoints = new Set();
+  for (const e of entries) {
+    try {
+      const u = new URL(e.url);
+      if (/\.(js|css|png|jpe?g|webp|svg|woff2?|ico|gif|mp4)$/.test(u.pathname)) continue;
+      hosts.add(u.hostname);
+      endpoints.add(u.origin + u.pathname);
+    } catch (_) { /* skip */ }
+  }
+  if (endpoints.size < 5) return;
+  if (lastSiteNoteWriteAt > networkCapture.startedAt) return;
+  const domain = domainOf(entries[0].url) || 'this site';
+  queueHint(
+    `Capture yielded ${endpoints.size} distinct endpoints across ${hosts.size} host(s) ` +
+    `and nothing has been recorded for ${domain} since it started.`
+  );
+}
+
+function attachHints(action, result) {
+  if (hintsMode !== 'on' && !hintsAllowOnce) return result;  // 'ask' holds the queue
+  if (!pendingHints.length || !HINT_CARRIERS.has(action)) return result;
+  hintsAllowOnce = false;
+  if (result === null || typeof result !== 'object' || Array.isArray(result)) return result;
+  const hints = pendingHints;
+  pendingHints = [];
+  return { ...result, _tethernetHints: hints };
+}
+
 // --- Command handlers ---
 
 async function handleServerCommand(action, params) {
+  const result = await routeServerCommand(action, params);
+  return attachHints(action, result);
+}
+
+async function routeServerCommand(action, params) {
   switch (action) {
     case 'list_tabs':
       return handleListTabs();
@@ -368,6 +566,7 @@ async function handleServerCommand(action, params) {
 
     case 'storage_set':
       await chrome.storage.local.set({ [params.key]: params.value });
+      if (String(params.key).startsWith('site:')) lastSiteNoteWriteAt = Date.now();
       return { key: params.key, saved: true };
 
     case 'storage_list': {
@@ -442,6 +641,7 @@ async function handleFocusTab(params) {
 async function handleNavigate(params) {
   const { tabId, url } = params;
   await chrome.tabs.update(tabId, { url });
+  noteDomainCoverage(url);
   return { success: true };
 }
 
@@ -1183,6 +1383,7 @@ async function stopCapture(reason = 'manual') {
 
   chrome.runtime.sendMessage({ type: 'capture_keepalive_stop' }).catch(() => {});
 
+  noteCaptureYield();
   updateRecordingIndicator();
   broadcastCaptureState();
 
@@ -1906,6 +2107,7 @@ async function forwardToContentScript(tabId, action, params) {
   try {
     const frameId = params.frameId ?? 0;
     const response = await chrome.tabs.sendMessage(tabId, { action, params }, { frameId });
+    noteInteractionOutcome(action, params, response);
     return response;
   } catch (error) {
     throw new Error(`Failed to communicate with content script: ${error.message}`);
@@ -1944,22 +2146,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'server_command') {
     const { action, params, requestId } = message.command;
 
-    if (!consentGranted) {
-      sendResponse({
-        requestId,
-        result: null,
-        error: 'Tethernet is not enabled. The user must grant consent via the extension popup or onboarding page before commands can be executed.',
-      });
-      return false;
-    }
+    consentReady.then(() => {
+      if (!consentGranted) {
+        sendResponse({
+          requestId,
+          result: null,
+          error: 'Tethernet is not enabled. The user must grant consent via the extension popup or onboarding page before commands can be executed.',
+        });
+        return;
+      }
 
-    handleServerCommand(action, params)
-      .then(result => sendResponse({ requestId, result, error: null }))
-      .catch(error => {
-        console.error(`[Tethernet] Command ${action} failed:`, error);
-        sendResponse({ requestId, result: null, error: error.message });
-      });
-    return true; // keep channel open for async response
+      return handleServerCommand(action, params)
+        .then(result => sendResponse({ requestId, result, error: null }))
+        .catch(error => {
+          console.error(`[Tethernet] Command ${action} failed:`, error);
+          sendResponse({ requestId, result: null, error: error.message });
+        });
+    });
+    return true; // every path answers asynchronously now
   }
 
   // Autorun: execute site-specific scripts in the page's main world
@@ -2053,6 +2257,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
 
+  if (message.type === 'popup_get_hints_mode') {
+    sendResponse({ mode: hintsMode, pending: hintAskPending, queued: pendingHints.length });
+    return false;
+  }
+
+  if (message.type === 'popup_set_hints_mode') {
+    setHintsMode(message.mode === 'on' ? 'on' : message.mode === 'off' ? 'off' : 'ask');
+    sendResponse({ ok: true, mode: hintsMode });
+    return false;
+  }
+
+  if (message.type === 'popup_answer_hint_ask') {
+    answerHintAsk(!!message.allow, !!message.remember);
+    sendResponse({ ok: true, mode: hintsMode });
+    return false;
+  }
+
   if (message.type === 'popup_get_passive_mode') {
     sendResponse({ enabled: passiveMode, count: passiveLog.length });
     return false;
@@ -2140,9 +2361,11 @@ updateIcon();
 updateRecordingIndicator();
 buildRecordingIconCache();
 
-chrome.storage.local.get(['tethernetConsent', 'tethernetPassiveMode', 'tethernetServerUrl']).then(({ tethernetConsent, tethernetPassiveMode, tethernetServerUrl }) => {
-  consentGranted = !!tethernetConsent;
+consentReady.then(() => {
   console.log(`[Tethernet] Consent: ${consentGranted ? 'granted' : 'not granted'}`);
+});
+
+chrome.storage.local.get(['tethernetPassiveMode', 'tethernetServerUrl']).then(({ tethernetPassiveMode, tethernetServerUrl }) => {
   if (tethernetPassiveMode) {
     setPassiveMode(true);
     console.log('[Tethernet] Passive mode restored from storage');
