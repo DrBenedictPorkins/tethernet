@@ -41,7 +41,10 @@
     return el;
   }
 
-  // Exposed on document (shared between isolated + main worlds) so execute_script can call them
+  // NOTE: these two are currently unreachable. Expando properties a content script
+  // sets on a DOM object live in the isolated world only — Chrome does not share them
+  // with the page's MAIN world, which is where execute_script runs. Nothing calls
+  // them today; reaching them would require an ISOLATED-world injection path.
 
   // Pre-register an element and get its stable tref_ handle
   document.__tethernetGetRef = (selector) => {
@@ -431,11 +434,15 @@
   }
 
   // --- Autorun: ask service worker to execute site scripts in page's main world ---
+  // Top frame only. The script now runs in all frames (so frameId-targeted tools can
+  // reach iframes), but autorun must still fire once per page — not once per iframe.
   // Retry once after 500ms in case the SW was asleep when the first message was sent.
-  const autorunMsg = { type: 'autorun_check', hostname: location.hostname };
-  chrome.runtime.sendMessage(autorunMsg).catch(() =>
-    setTimeout(() => chrome.runtime.sendMessage(autorunMsg).catch(() => {}), 500)
-  );
+  if (window.top === window) {
+    const autorunMsg = { type: 'autorun_check', hostname: location.hostname };
+    chrome.runtime.sendMessage(autorunMsg).catch(() =>
+      setTimeout(() => chrome.runtime.sendMessage(autorunMsg).catch(() => {}), 500)
+    );
+  }
 
   chrome.runtime.sendMessage({ type: 'content_script_ready' }).catch(() => {});
 

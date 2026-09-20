@@ -498,7 +498,9 @@ async function handleListFrames(params) {
       }))
     };
   } catch (error) {
-    return { error: error.message, frames: [] };
+    // Throw rather than return {error} — a returned error field travels in the
+    // envelope's `result` slot, so the MCP layer reports the call as a success.
+    throw new Error(`Failed to list frames: ${error.message}`);
   }
 }
 
@@ -539,8 +541,123 @@ async function scaleDataUrl(dataUrl, scale, format, quality) {
   return `data:${mimeType};base64,${arrayBufferToBase64(buffer)}`;
 }
 
+// Full-page capture: captureVisibleTab only ever returns the viewport, so a full-page
+// shot means scrolling in viewport-sized steps and stitching the slices together.
+//
+// Two constraints shape this:
+//   - captureVisibleTab is quota-limited (roughly 2 calls/sec); exceeding it throws.
+//   - OffscreenCanvas tops out around 16384px per side, so very long pages are
+//     truncated rather than silently producing a blank canvas.
+//
+// Elements with position:fixed/sticky are hidden after the first slice, otherwise a
+// sticky header repeats in every slice down the stitched image.
+const MAX_FULLPAGE_PX = 16384;
+const CAPTURE_INTERVAL_MS = 600;
+
+async function captureFullPage(tabId, windowId, options, format, quality, scale) {
+  const runInPage = (func, args = []) =>
+    chrome.scripting.executeScript({ target: { tabId }, func, args, world: 'ISOLATED' })
+      .then(r => r?.[0]?.result);
+
+  const m = await runInPage(() => ({
+    scrollHeight: Math.max(
+      document.documentElement.scrollHeight,
+      document.body ? document.body.scrollHeight : 0
+    ),
+    innerHeight: window.innerHeight,
+    innerWidth: window.innerWidth,
+    dpr: window.devicePixelRatio || 1,
+    scrollX: window.scrollX,
+    scrollY: window.scrollY,
+  }));
+  if (!m || !m.innerHeight) throw new Error('fullPage: could not read page metrics');
+
+  const maxCssHeight = Math.floor(MAX_FULLPAGE_PX / m.dpr);
+  const totalHeight = Math.min(m.scrollHeight, maxCssHeight);
+  const truncated = m.scrollHeight > totalHeight;
+  const sliceCount = Math.max(1, Math.ceil(totalHeight / m.innerHeight));
+
+  // Single viewport — nothing to stitch.
+  if (sliceCount === 1 && !truncated) {
+    const dataUrl = await chrome.tabs.captureVisibleTab(windowId, options);
+    return scale && scale < 1 ? scaleDataUrl(dataUrl, scale, format, quality) : dataUrl;
+  }
+
+  const canvas = new OffscreenCanvas(
+    Math.round(m.innerWidth * m.dpr),
+    Math.round(totalHeight * m.dpr)
+  );
+  const ctx = canvas.getContext('2d');
+
+  try {
+    for (let i = 0; i < sliceCount; i++) {
+      // Clamp the final slice so it aligns flush with the bottom instead of
+      // scrolling past it (which would duplicate a band of the previous slice).
+      const targetY = Math.min(i * m.innerHeight, Math.max(0, totalHeight - m.innerHeight));
+
+      // Read back the real scroll position — pages with scroll-snap or overflow
+      // containers do not always land where they were told to.
+      const actualY = await runInPage((y, hideFixed) => {
+        window.scrollTo(0, y);
+        if (hideFixed) {
+          document.querySelectorAll('*').forEach(el => {
+            const pos = getComputedStyle(el).position;
+            if (pos === 'fixed' || pos === 'sticky') {
+              if (!el.hasAttribute('data-tethernet-fixed')) {
+                el.setAttribute('data-tethernet-fixed', el.style.visibility || '');
+                el.style.visibility = 'hidden';
+              }
+            }
+          });
+        }
+        return window.scrollY;
+      }, [targetY, i > 0]);
+
+      if (i > 0) await new Promise(r => setTimeout(r, CAPTURE_INTERVAL_MS));
+      await new Promise(r => setTimeout(r, 100)); // let the paint settle
+
+      let sliceUrl;
+      try {
+        sliceUrl = await chrome.tabs.captureVisibleTab(windowId, options);
+      } catch (e) {
+        if (!/quota/i.test(e.message)) throw e;
+        await new Promise(r => setTimeout(r, 1200));
+        sliceUrl = await chrome.tabs.captureVisibleTab(windowId, options);
+      }
+      const bitmap = await createImageBitmap(await fetch(sliceUrl).then(r => r.blob()));
+      ctx.drawImage(bitmap, 0, Math.round(actualY * m.dpr));
+      bitmap.close();
+    }
+  } finally {
+    // Always restore visibility and scroll, even if a capture threw mid-loop.
+    await runInPage((x, y) => {
+      document.querySelectorAll('[data-tethernet-fixed]').forEach(el => {
+        el.style.visibility = el.getAttribute('data-tethernet-fixed');
+        el.removeAttribute('data-tethernet-fixed');
+      });
+      window.scrollTo(x, y);
+    }, [m.scrollX, m.scrollY]).catch(() => {});
+  }
+
+  const outW = scale ? Math.round(canvas.width * scale) : canvas.width;
+  const outH = scale ? Math.round(canvas.height * scale) : canvas.height;
+  let out = canvas;
+  if (scale && scale < 1) {
+    out = new OffscreenCanvas(outW, outH);
+    out.getContext('2d').drawImage(canvas, 0, 0, outW, outH);
+  }
+
+  const mimeType = format === 'jpeg' ? 'image/jpeg' : 'image/png';
+  const blob = await out.convertToBlob({
+    type: mimeType,
+    quality: format === 'jpeg' ? quality / 100 : undefined,
+  });
+  const dataUrl = `data:${mimeType};base64,${arrayBufferToBase64(await blob.arrayBuffer())}`;
+  return { dataUrl, truncated, capturedHeight: totalHeight, pageHeight: m.scrollHeight };
+}
+
 async function handleTakeScreenshot(params) {
-  const { tabId, format, quality, cropTo, selector, scale } = params;
+  const { tabId, format, quality, cropTo, selector, scale, fullPage } = params;
   const captureFormat = format || 'jpeg';
   const captureQuality = quality || 80;
   const options = { format: captureFormat };
@@ -555,6 +672,16 @@ async function handleTakeScreenshot(params) {
   await chrome.tabs.update(tabId, { active: true });
   await chrome.windows.update(tab.windowId, { focused: true });
   await new Promise(r => setTimeout(r, 150));
+
+  if (fullPage) {
+    // cropTo/selector are viewport-relative; they have no meaning against a stitched
+    // full-page image. Reject rather than silently ignoring one of them.
+    if (cropTo || selector) {
+      throw new Error('take_screenshot: fullPage cannot be combined with cropTo or selector — those crop the viewport.');
+    }
+    const result = await captureFullPage(tabId, tab.windowId, options, captureFormat, captureQuality, scale);
+    return typeof result === 'string' ? { dataUrl: result } : result;
+  }
 
   const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, options);
 
@@ -631,7 +758,9 @@ async function handleExecuteScriptViaAPI(params) {
 
     const rawResult = results?.[0]?.result;
     if (rawResult && typeof rawResult === 'object' && '__tethernet_error' in rawResult) {
-      return { error: rawResult.__tethernet_error };
+      // The page's JS threw. Returning it as a value put the message in the envelope's
+      // `result` slot, so the MCP layer reported the failed script as a success.
+      throw new Error(rawResult.__tethernet_error);
     }
 
     let serialized;
@@ -644,14 +773,14 @@ async function handleExecuteScriptViaAPI(params) {
     const payloadSize = serialized.length;
 
     if (payloadSize > PAYLOAD_LIMIT && !preview && !force) {
-      return {
-        error: 'payload_too_large',
-        size: payloadSize,
-        sizeFormatted: (payloadSize / 1024).toFixed(1) + 'KB',
-        limit: PAYLOAD_LIMIT,
-        limitFormatted: (PAYLOAD_LIMIT / 1024).toFixed(0) + 'KB',
-        message: `Result exceeds ${(PAYLOAD_LIMIT / 1024).toFixed(0)}KB (actual: ${(payloadSize / 1024).toFixed(1)}KB). Options: 1) Rewrite JS to filter/limit results, 2) Use preview:true for first ${(PAYLOAD_LIMIT / 1024).toFixed(0)}KB sample, 3) Use force:true to get full payload.`
-      };
+      // Blocked, so it is a failure — but the guidance has to survive, since it is
+      // the only thing telling the caller how to retry.
+      throw new Error(
+        `payload_too_large: result exceeds ${(PAYLOAD_LIMIT / 1024).toFixed(0)}KB ` +
+        `(actual: ${(payloadSize / 1024).toFixed(1)}KB). Options: 1) Rewrite JS to filter/limit results, ` +
+        `2) Use preview:true for first ${(PAYLOAD_LIMIT / 1024).toFixed(0)}KB sample, ` +
+        `3) Use force:true to get full payload.`
+      );
     }
 
     if (preview && payloadSize > PAYLOAD_LIMIT) {
@@ -667,7 +796,9 @@ async function handleExecuteScriptViaAPI(params) {
 
     return { result: rawResult };
   } catch (error) {
-    return { error: error.message };
+    // Rethrow so injection failures — and rejected promises from wait_for_element /
+    // wait_for_text — reach the MCP layer as errors instead of as green results.
+    throw error instanceof Error ? error : new Error(String(error));
   }
 }
 
@@ -999,7 +1130,7 @@ async function stopDebuggerCapture(tabId) {
 
 async function startCapture(params = {}) {
   if (networkCapture.active) {
-    return { error: 'A network capture is already in progress', state: getCaptureState() };
+    throw new Error('A network capture is already in progress — call stop_network_capture first.');
   }
 
   const requestedMax = Number(params.maxEntries || DEFAULT_MAX_ENTRIES);
@@ -1161,7 +1292,7 @@ function findInCapture(opts = {}) {
   }
 
   const query = opts.query;
-  if (!query || typeof query !== 'string') return { error: 'query is required (string)' };
+  if (!query || typeof query !== 'string') throw new Error('find_in_capture: query is required (string)');
 
   const scope = opts.scope || 'response_body';
   const useRegex = !!opts.regex;
@@ -1171,7 +1302,7 @@ function findInCapture(opts = {}) {
   let matcher;
   if (useRegex) {
     try { matcher = new RegExp(query); }
-    catch (e) { return { error: `Invalid regex: ${e.message}` }; }
+    catch (e) { throw new Error(`find_in_capture: invalid regex: ${e.message}`); }
   }
 
   function matchAndSnippet(text) {
@@ -1243,7 +1374,7 @@ async function handleCaptureNetwork(params) {
   const { duration = 5000, urlFilter = '', methodFilter = '', tabId, maxBodySize = 4000 } = params;
   const cappedDuration = Math.min(duration, 30000);
 
-  if (networkCapture.active) return { error: 'A network capture is already in progress' };
+  if (networkCapture.active) throw new Error('A network capture is already in progress');
 
   await startCapture({ tabId, urlFilter, methodFilter, maxBodySize, maxEntries: MAX_ENTRIES_HARD_CAP });
   await new Promise((resolve) => setTimeout(resolve, cappedDuration));
@@ -1414,7 +1545,10 @@ async function handleFetchWithSession(params) {
   });
 
   const result = results?.[0]?.result;
-  if (!result) return { error: 'Script execution returned no result (tab may not have a loaded page)' };
+  if (!result) throw new Error('fetch_with_session: script returned no result (tab may not have a loaded page)');
+  // Transport-level failures (abort/timeout/DNS/CORS) are failures of the call, not
+  // response data — surface them as errors rather than as a successful fetch.
+  if (result.error) throw new Error(result.error);
   return result;
 }
 
@@ -1461,7 +1595,10 @@ async function handleDialog(params) {
     world: 'MAIN',
   });
 
-  return results?.[0]?.result ?? { error: 'Script returned no result' };
+  const result = results?.[0]?.result;
+  if (!result) throw new Error('handle_dialog: script returned no result (tab may not have a loaded page)');
+  if (result.error) throw new Error(result.error);
+  return result;
 }
 
 async function handleUploadFile(params) {
@@ -1511,21 +1648,26 @@ async function handleUploadFile(params) {
     world: 'MAIN',
   });
 
-  return results?.[0]?.result ?? { error: 'Script returned no result' };
+  const result = results?.[0]?.result;
+  if (!result) throw new Error('upload_file: script returned no result (tab may not have a loaded page)');
+  // The injected function reports selector/decoding failures as {error}; surfacing
+  // that as a resolved value made a failed upload read as a successful tool call.
+  if (result.error) throw new Error(result.error);
+  return result;
 }
 
 async function handleRunLighthouse(params) {
   const { tabId, categories = ['performance', 'accessibility', 'seo', 'best-practices'] } = params;
 
   if (networkCapture.debuggerAttached && networkCapture.tabId === tabId) {
-    return { error: 'Network capture is active on this tab — call stop_network_capture first.' };
+    throw new Error('Network capture is active on this tab — call stop_network_capture first.');
   }
 
   let tab;
   try {
     tab = await chrome.tabs.get(tabId);
   } catch (e) {
-    return { error: `Tab ${tabId} not found` };
+    throw new Error(`Tab ${tabId} not found`);
   }
 
   let debuggerAttached = false;
@@ -1533,7 +1675,7 @@ async function handleRunLighthouse(params) {
     await chrome.debugger.attach({ tabId }, '1.3');
     debuggerAttached = true;
   } catch (e) {
-    return { error: `Could not attach debugger: ${e.message}. Close DevTools on this tab and try again.` };
+    throw new Error(`Could not attach debugger: ${e.message}. Close DevTools on this tab and try again.`);
   }
 
   const audit = { url: tab.url, categories: {} };
