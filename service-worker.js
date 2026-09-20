@@ -825,7 +825,6 @@ const networkCapture = {
   maxEntries: DEFAULT_MAX_ENTRIES,
   maxBodySize: 4000,
   entries: [],
-  pendingRequests: new Map(),
   ceilingTimer: null,
   debuggerAttached: false,
 };
@@ -928,10 +927,12 @@ function setPassiveMode(enabled) {
   }
 }
 
-// CDP request tracking: CDP requestId → { url }
+// CDP request tracking: CDP requestId → partially-built entry.
+// Keyed by requestId, not URL. Keying bodies by URL collapsed every request to a
+// repeated endpoint (a GraphQL gateway, a polling API) onto one body, and the
+// URL-match merge then handed that body to all of them.
 const debuggerState = {
-  requestUrls: new Map(),
-  bodies: new Map(), // url → body string
+  inflight: new Map(),
 };
 
 function truncateHeaderList(headers) {
@@ -981,125 +982,104 @@ function matchesCaptureFilters(url, method, tabId) {
   return true;
 }
 
-function serializeBody(requestBody) {
-  if (!requestBody) return null;
-  try {
-    if (requestBody.raw && Array.isArray(requestBody.raw)) {
-      const decoder = new TextDecoder('utf-8');
-      const parts = requestBody.raw.map(part =>
-        part.bytes instanceof ArrayBuffer ? decoder.decode(part.bytes) : ''
-      );
-      return parts.join('');
-    }
-    if (requestBody.formData) return JSON.stringify(requestBody.formData);
-    return null;
-  } catch (e) { return null; }
+// Capture is CDP-only. webRequest and CDP assign different ids to the same request,
+// so the two streams could only be joined on URL — which is not unique. Building
+// entries from CDP events keeps one requestId across the whole lifecycle, so the
+// body is fetched with the same id that identified the request.
+// Passive mode deliberately stays on webRequest: it is always-on and browser-wide,
+// and the debugger cannot stay attached to every tab.
+
+function cdpHeadersToList(headers) {
+  if (!headers || typeof headers !== 'object') return null;
+  return truncateHeaderList(Object.entries(headers).map(([name, value]) => ({ name, value: String(value) })));
 }
 
-// webRequest listeners — always installed, idle when not capturing
-chrome.webRequest.onBeforeRequest.addListener(
-  (details) => {
-    if (!matchesCaptureFilters(details.url, details.method || 'GET', details.tabId)) return;
+function finalizeEntry(entry) {
+  if (!entry || entry.__done) return;
+  entry.__done = true;
+  delete entry.__done;
+  networkCapture.entries.push(entry);
+  broadcastCaptureState();
+  if (networkCapture.active && networkCapture.entries.length >= networkCapture.maxEntries) {
+    stopCapture('threshold');
+  }
+}
 
-    networkCapture.pendingRequests.set(details.requestId, {
-      url: details.url,
-      method: details.method,
-      tabId: details.tabId,
-      type: details.type,
-      startTime: details.timeStamp,
-      requestBody: truncateBody(serializeBody(details.requestBody)),
-      requestHeaders: null,
-    });
-  },
-  { urls: ['<all_urls>'] },
-  ['requestBody']
-);
-
-chrome.webRequest.onSendHeaders.addListener(
-  (details) => {
-    const pending = networkCapture.pendingRequests.get(details.requestId);
-    if (!pending) return;
-    pending.requestHeaders = truncateHeaderList(details.requestHeaders);
-  },
-  { urls: ['<all_urls>'] },
-  ['requestHeaders']
-);
-
-chrome.webRequest.onCompleted.addListener(
-  (details) => {
-    const pending = networkCapture.pendingRequests.get(details.requestId);
-    if (!pending) return;
-    networkCapture.pendingRequests.delete(details.requestId);
-
-    networkCapture.entries.push({
-      url: pending.url,
-      method: pending.method,
-      status: details.statusCode,
-      type: pending.type,
-      duration: Math.round(details.timeStamp - pending.startTime),
-      requestHeaders: pending.requestHeaders,
-      requestBody: pending.requestBody,
-      responseHeaders: truncateHeaderList(details.responseHeaders),
-      timestamp: details.timeStamp,
-    });
-    broadcastCaptureState();
-    if (networkCapture.active && networkCapture.entries.length >= networkCapture.maxEntries) {
-      stopCapture('threshold');
-    }
-  },
-  { urls: ['<all_urls>'] },
-  ['responseHeaders']
-);
-
-chrome.webRequest.onErrorOccurred.addListener(
-  (details) => {
-    const pending = networkCapture.pendingRequests.get(details.requestId);
-    if (!pending) return;
-    networkCapture.pendingRequests.delete(details.requestId);
-    networkCapture.entries.push({
-      url: pending.url,
-      method: pending.method,
-      error: details.error,
-      type: pending.type,
-      duration: Math.round(details.timeStamp - pending.startTime),
-      requestHeaders: pending.requestHeaders,
-      requestBody: pending.requestBody,
-      timestamp: details.timeStamp,
-    });
-    broadcastCaptureState();
-    if (networkCapture.active && networkCapture.entries.length >= networkCapture.maxEntries) {
-      stopCapture('threshold');
-    }
-  },
-  { urls: ['<all_urls>'] }
-);
-
-// chrome.debugger listener for response bodies (no DevTools required)
 chrome.debugger.onEvent.addListener(async (source, method, params) => {
   if (!networkCapture.debuggerAttached) return;
   if (source.tabId !== networkCapture.tabId) return;
 
   if (method === 'Network.requestWillBeSent') {
-    debuggerState.requestUrls.set(params.requestId, params.request.url);
+    // A redirect reuses the same requestId: close out the hop before starting the next.
+    if (params.redirectResponse) {
+      const prev = debuggerState.inflight.get(params.requestId);
+      if (prev) {
+        prev.status = params.redirectResponse.status;
+        prev.responseHeaders = cdpHeadersToList(params.redirectResponse.headers);
+        prev.duration = Math.round((params.timestamp - prev.__t0) * 1000);
+        delete prev.__t0;
+        debuggerState.inflight.delete(params.requestId);
+        finalizeEntry(prev);
+      }
+    }
+
+    const url = params.request.url;
+    const method_ = params.request.method || 'GET';
+    if (!matchesCaptureFilters(url, method_, source.tabId)) return;
+
+    debuggerState.inflight.set(params.requestId, {
+      url,
+      method: method_,
+      status: null,
+      type: params.type || null,
+      duration: null,
+      requestHeaders: cdpHeadersToList(params.request.headers),
+      requestBody: truncateBody(params.request.postData || null),
+      responseHeaders: null,
+      responseBody: null,
+      timestamp: params.wallTime ? params.wallTime * 1000 : Date.now(),
+      __t0: params.timestamp,
+    });
+    return;
+  }
+
+  const entry = debuggerState.inflight.get(params.requestId);
+  if (!entry) return;
+
+  if (method === 'Network.responseReceived') {
+    entry.status = params.response.status;
+    entry.responseHeaders = cdpHeadersToList(params.response.headers);
+    if (params.type) entry.type = params.type;
+    return;
   }
 
   if (method === 'Network.loadingFinished') {
-    const url = debuggerState.requestUrls.get(params.requestId);
-    if (!url) return;
+    debuggerState.inflight.delete(params.requestId);
     try {
-      const bodyResult = await chrome.debugger.sendCommand(
+      const res = await chrome.debugger.sendCommand(
         { tabId: source.tabId },
         'Network.getResponseBody',
         { requestId: params.requestId }
       );
-      if (bodyResult) {
-        const body = bodyResult.base64Encoded
-          ? atob(bodyResult.body)
-          : bodyResult.body;
-        debuggerState.bodies.set(url, truncateBody(body));
+      if (res) {
+        entry.responseBody = truncateBody(res.base64Encoded ? atob(res.body) : res.body);
       }
-    } catch (e) { /* body not available for this request */ }
-    debuggerState.requestUrls.delete(params.requestId);
+    } catch (e) {
+      // Body evicted from the CDP buffer. Leave it null — an empty body is a fact,
+      // a neighbour's body is a lie.
+    }
+    entry.duration = Math.round((params.timestamp - entry.__t0) * 1000);
+    delete entry.__t0;
+    finalizeEntry(entry);
+    return;
+  }
+
+  if (method === 'Network.loadingFailed') {
+    debuggerState.inflight.delete(params.requestId);
+    entry.error = params.errorText || 'failed';
+    entry.duration = Math.round((params.timestamp - entry.__t0) * 1000);
+    delete entry.__t0;
+    finalizeEntry(entry);
   }
 });
 
@@ -1110,8 +1090,7 @@ chrome.debugger.onDetach.addListener((source) => {
 });
 
 async function startDebuggerCapture(tabId) {
-  debuggerState.requestUrls.clear();
-  debuggerState.bodies.clear();
+  debuggerState.inflight.clear();
   try {
     await chrome.debugger.attach({ tabId }, '1.3');
     await chrome.debugger.sendCommand({ tabId }, 'Network.enable');
@@ -1141,18 +1120,28 @@ async function startCapture(params = {}) {
   networkCapture.endedAt = null;
   networkCapture.endReason = null;
   networkCapture.tabId = params.tabId != null ? Number(params.tabId) : null;
+  if (networkCapture.tabId == null) {
+    networkCapture.active = false;
+    throw new Error('Network capture requires a tabId — CDP attaches per tab.');
+  }
   networkCapture.urlFilter = params.urlFilter || '';
   networkCapture.methodFilter = params.methodFilter || '';
   networkCapture.maxEntries = maxEntries;
   networkCapture.maxBodySize = params.maxBodySize || 4000;
   networkCapture.entries = [];
-  networkCapture.pendingRequests.clear();
   networkCapture.debuggerAttached = false;
   networkCapture.debuggerWasUsed = false;
 
-  // Attach debugger for response bodies if a specific tab is being captured
-  if (networkCapture.tabId) {
-    networkCapture.debuggerAttached = await startDebuggerCapture(networkCapture.tabId);
+  // CDP is the only source of entries now, so a failed attach is a failed capture
+  // rather than a silent downgrade to metadata-only.
+  networkCapture.debuggerAttached = await startDebuggerCapture(networkCapture.tabId);
+  if (!networkCapture.debuggerAttached) {
+    networkCapture.active = false;
+    updateRecordingIndicator();
+    throw new Error(
+      'Could not attach the debugger to this tab, so no traffic can be captured. ' +
+      'Close DevTools on the target tab and retry.'
+    );
   }
 
   if (networkCapture.ceilingTimer) clearTimeout(networkCapture.ceilingTimer);
@@ -1178,28 +1167,19 @@ async function stopCapture(reason = 'manual') {
   networkCapture.active = false;
   networkCapture.endedAt = Date.now();
   networkCapture.endReason = reason;
-  networkCapture.pendingRequests.clear();
 
   if (networkCapture.ceilingTimer) {
     clearTimeout(networkCapture.ceilingTimer);
     networkCapture.ceilingTimer = null;
   }
 
-  // Detach debugger and merge response bodies
+  // Bodies are attached to their own entry as each request finishes, so there is
+  // nothing to reconcile here.
   if (networkCapture.debuggerAttached && networkCapture.tabId) {
     await stopDebuggerCapture(networkCapture.tabId);
     networkCapture.debuggerAttached = false;
-
-    // Merge captured bodies into entries by URL match
-    for (const entry of networkCapture.entries) {
-      if (!entry.responseBody) {
-        const baseUrl = entry.url.split('?')[0];
-        const body = debuggerState.bodies.get(entry.url)
-          || debuggerState.bodies.get(baseUrl);
-        if (body) entry.responseBody = body;
-      }
-    }
   }
+  debuggerState.inflight.clear();
 
   chrome.runtime.sendMessage({ type: 'capture_keepalive_stop' }).catch(() => {});
 
