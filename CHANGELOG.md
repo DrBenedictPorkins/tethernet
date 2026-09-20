@@ -63,8 +63,10 @@
   This is a single yes/no, chosen during onboarding, because it means feeding observations
   to an AI session and that is the user's call to make once — not a prompt that interrupts
   them later. There is no per-event asking: an earlier cut queued hints behind a toolbar
-  badge, which nobody watching a terminal would ever notice. An install that predates the
-  question stays off until switched on in the popup, beside Passive Mode.
+  badge, which nobody watching a terminal would ever notice. It defaults on, matching the
+  checked box on the onboarding page — an absent key reading as off would have the UI claim
+  something the worker does not do. Only an explicit off disables it, from the toggle beside
+  Passive Mode.
 
 - **Site notes are delivered, not just counted.** Detector 2 previously said only whether a
   domain had notes — the caller still had to remember to fetch them, which is the same

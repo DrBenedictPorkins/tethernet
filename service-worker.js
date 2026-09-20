@@ -224,13 +224,15 @@ let pendingHints = [];
 
 // One switch, decided at install. Note reminders mean the extension is feeding
 // observations to an AI session, and that is a yes/no the user makes once —
-// not a prompt that interrupts them later. Absent key means off, so an existing
-// install that never saw the onboarding question stays silent until asked for.
-let hintsEnabled = false;
+// not a prompt that interrupts them later.
+// Default on: the onboarding checkbox is checked by default, so an absent key has to
+// read the same way or the UI is claiming something the worker does not do. Only an
+// explicit 'off' disables it.
+let hintsEnabled = true;
 
 chrome.storage.local.get('tethernetHintsMode')
-  .then(({ tethernetHintsMode }) => { hintsEnabled = tethernetHintsMode === 'on'; })
-  .catch(() => { hintsEnabled = false; });
+  .then(({ tethernetHintsMode }) => { hintsEnabled = tethernetHintsMode !== 'off'; })
+  .catch(() => { hintsEnabled = true; });
 
 function setHintsEnabled(on) {
   hintsEnabled = !!on;
