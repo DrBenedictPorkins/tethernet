@@ -3,8 +3,10 @@
 builds/
 .worktrees/
 
+# Personal, machine-specific — see CLAUDE.md for the shared instructions
+CLAUDE.local.md
+
 # Internal — not for public repo
-CLAUDE.md
 SUBMISSION_NOTES.md
 store/
 scripts/
