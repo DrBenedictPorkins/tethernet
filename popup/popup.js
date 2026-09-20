@@ -71,6 +71,8 @@ function initMainUI() {
   const passiveCount = document.getElementById('passive-count');
   const passiveReportBtn = document.getElementById('passive-report-btn');
   const hintsToggle = document.getElementById('hints-toggle');
+  const siteNotes = document.getElementById('site-notes');
+  const notesReportBtn = document.getElementById('notes-report-btn');
 
   let connectedAt = null;
   let updateTimer = null;
@@ -229,10 +231,42 @@ function initMainUI() {
     })
     .catch(() => {});
 
+  function renderSiteNotes(info) {
+    siteNotes.replaceChildren();
+    if (!info || !info.domain) return;
+    if (!info.keys) {
+      const none = document.createElement('span');
+      none.className = 'site-notes-none';
+      none.textContent = `No notes for ${info.domain}`;
+      siteNotes.appendChild(none);
+      return;
+    }
+    const strong = document.createElement('strong');
+    strong.textContent = info.domain;
+    const parts = [`${info.keys} record${info.keys === 1 ? '' : 's'}`];
+    if (info.facts) parts.push(`${info.facts} fact${info.facts === 1 ? '' : 's'}`);
+    if (info.log) parts.push(`${info.log} log`);
+    const rest = document.createElement('span');
+    rest.textContent = ` — ${parts.join(', ')}${info.newest ? ` · ${info.newest}` : ''}`;
+    siteNotes.append(strong, rest);
+  }
+
+  function refreshSiteNotes(url) {
+    let domain = '';
+    try { domain = new URL(url).hostname; } catch (_) { return renderSiteNotes(null); }
+    chrome.runtime.sendMessage({ type: 'popup_get_site_notes', domain })
+      .then(renderSiteNotes)
+      .catch(() => {});
+  }
+
   // One switch. The choice is made at install; this only reverses it.
   function renderHints(state) {
     if (state) hintsToggle.checked = !!state.enabled;
   }
+
+  notesReportBtn.addEventListener('click', () => {
+    chrome.tabs.create({ url: chrome.runtime.getURL('report/notes.html') });
+  });
 
   hintsToggle.addEventListener('change', () => {
     chrome.runtime.sendMessage({
@@ -268,6 +302,7 @@ function initMainUI() {
         if (response.currentTab) {
           currentTabId = response.currentTab.id;
           updateTabStatus(response.currentTab);
+          refreshSiteNotes(response.currentTab.url);
         }
       }
     })

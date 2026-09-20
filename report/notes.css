@@ -1,0 +1,30 @@
+.site { margin-bottom: 30px; border: 1px solid #1a1a28; border-radius: 6px; overflow: hidden; }
+
+.site-head {
+  display: flex; align-items: baseline; gap: 12px;
+  padding: 10px 14px; background: #111118; border-bottom: 1px solid #1a1a28;
+}
+.site-head h2 { font-size: 14px; color: #00E5D0; text-transform: none; letter-spacing: 0; margin: 0; }
+.site-head .tally { font-size: 11px; color: #555; }
+.site-head .age { margin-left: auto; font-size: 11px; color: #444; }
+
+.record { padding: 10px 14px; border-bottom: 1px solid #111118; }
+.record:last-child { border-bottom: none; }
+.record-key { font-size: 11px; color: #666; font-family: 'Courier New', monospace; margin-bottom: 8px; }
+
+.fact { display: grid; grid-template-columns: 180px 1fr; gap: 12px; padding: 5px 0; align-items: start; }
+.fact-name { color: #e0e0e8; font-weight: 600; font-size: 12px; word-break: break-word; }
+.fact-value { color: #999; font-size: 12px; white-space: pre-wrap; word-break: break-word; }
+.fact-verified { color: #3a3a4a; font-size: 10px; margin-left: 6px; white-space: nowrap; }
+.fact-stale .fact-verified { color: #f59e0b; }
+
+.log-entry { display: grid; grid-template-columns: 100px 1fr; gap: 12px; padding: 4px 0; font-size: 12px; }
+.log-date { color: #555; font-family: 'Courier New', monospace; }
+.log-note { color: #999; white-space: pre-wrap; }
+
+.subhead {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.6px;
+  color: #444; margin: 10px 0 4px;
+}
+
+.raw { color: #777; font-size: 12px; white-space: pre-wrap; word-break: break-word; font-family: 'Courier New', monospace; }

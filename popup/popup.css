@@ -664,3 +664,21 @@ body {
 
 
 
+
+.site-notes {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #1e1e2e;
+  font-size: 11px;
+  color: #777;
+  font-family: 'Courier New', monospace;
+}
+
+.site-notes .site-notes-none {
+  color: #555;
+}
+
+.site-notes strong {
+  color: #00E5D0;
+  font-weight: 600;
+}

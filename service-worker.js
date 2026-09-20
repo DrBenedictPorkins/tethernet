@@ -235,7 +235,7 @@ chrome.storage.local.get('tethernetHintsMode')
 function setHintsEnabled(on) {
   hintsEnabled = !!on;
   chrome.storage.local.set({ tethernetHintsMode: hintsEnabled ? 'on' : 'off' });
-  if (!hintsEnabled) pendingHints = [];
+  if (!hintsEnabled) { pendingHints = []; pendingNotes = null; }
   chrome.runtime.sendMessage({
     type: 'hints_state_changed',
     enabled: hintsEnabled,
@@ -255,8 +255,32 @@ const INTERACTION_ACTIONS = new Set([
   'select_option', 'set_checkbox', 'scroll_to_element', 'get_ref',
 ]);
 
+const NOTES_PAYLOAD_LIMIT = 8000;
+let pendingNotes = null;            // a domain's notes, delivered once per worker life
+
 const recentFailures = new Map();   // `${tabId}|${selector}` -> { action, t }
-const hintedDomains = new Set();    // one no-notes hint per domain per worker life
+// Delivery is deduped in chrome.storage.session, not memory. MV3 kills this worker
+// after ~30s idle, so an in-memory Set meant the whole notes payload was re-sent after
+// every idle gap — once per browser session is the intent, not once per worker life.
+// storage.session clears when the browser session ends, which is the right lifetime.
+const NOTES_SENT_KEY = '__tethernet_notes_sent__';
+
+async function alreadyDelivered(domain) {
+  try {
+    const got = await chrome.storage.session.get(NOTES_SENT_KEY);
+    return (got[NOTES_SENT_KEY] || []).includes(domain);
+  } catch (_) { return false; }
+}
+
+async function markDelivered(domain) {
+  try {
+    const got = await chrome.storage.session.get(NOTES_SENT_KEY);
+    const list = got[NOTES_SENT_KEY] || [];
+    if (list.includes(domain)) return;
+    list.push(domain);
+    await chrome.storage.session.set({ [NOTES_SENT_KEY]: list });
+  } catch (_) { /* session storage unavailable — worst case we send twice */ }
+}
 let lastSiteNoteWriteAt = 0;
 
 function queueHint(text) {
@@ -299,12 +323,33 @@ function noteInteractionOutcome(action, params, result) {
 // Detector 2 — working on a domain with no notes at all.
 async function noteDomainCoverage(url) {
   const domain = domainOf(url);
-  if (!domain || hintedDomains.has(domain)) return;
-  hintedDomains.add(domain);
+  if (!domain) return;
+  if (await alreadyDelivered(domain)) return;
+  await markDelivered(domain);
   try {
-    const key = 'site:' + domain;
-    const got = await chrome.storage.local.get(key);
-    if (got[key] == null) queueHint(`No site notes exist for ${domain}.`);
+    const all = await chrome.storage.local.get(null);
+    const prefix = 'site:' + domain;
+    const records = {};
+    for (const k of Object.keys(all)) {
+      if (k !== prefix && !k.startsWith(prefix + ':')) continue;
+      let v = all[k];
+      if (typeof v === 'string') { try { v = JSON.parse(v); } catch (_) {} }
+      records[k] = v;
+    }
+    const keys = Object.keys(records);
+    if (keys.length === 0) {
+      queueHint(`No site notes exist for ${domain}.`);
+      return;
+    }
+    // Knowing notes exist is worthless without their contents, and someone working a
+    // site tends to stay on it — so hand the whole record over once per domain rather
+    // than make the caller ask. Oversized records point at the tool instead.
+    const size = JSON.stringify(records).length;
+    pendingNotes = size > NOTES_PAYLOAD_LIMIT
+      ? { domain, keys, truncated: true,
+          note: `Notes for ${domain} are ${(size / 1024).toFixed(1)}KB, over the inline limit. `
+              + `Read them with browser_storage_get on the keys listed.` }
+      : { domain, keys, records };
   } catch (_) { /* storage unavailable — say nothing rather than guess */ }
 }
 
@@ -333,11 +378,14 @@ function noteCaptureYield() {
 
 function attachHints(action, result) {
   if (!hintsEnabled) return result;
-  if (!pendingHints.length || !HINT_CARRIERS.has(action)) return result;
+  if (!HINT_CARRIERS.has(action)) return result;
   if (result === null || typeof result !== 'object' || Array.isArray(result)) return result;
-  const hints = pendingHints;
-  pendingHints = [];
-  return { ...result, _tethernetHints: hints };
+  if (!pendingHints.length && !pendingNotes) return result;
+
+  const out = { ...result };
+  if (pendingHints.length) { out._tethernetHints = pendingHints; pendingHints = []; }
+  if (pendingNotes) { out._tethernetSiteNotes = pendingNotes; pendingNotes = null; }
+  return out;
 }
 
 // --- Command handlers ---
@@ -515,7 +563,12 @@ async function routeServerCommand(action, params) {
 
     case 'storage_set':
       await chrome.storage.local.set({ [params.key]: params.value });
-      if (String(params.key).startsWith('site:')) lastSiteNoteWriteAt = Date.now();
+      if (String(params.key).startsWith('site:')) {
+        lastSiteNoteWriteAt = Date.now();
+        // The writer already holds what it just wrote; no need to replay it.
+        const d = String(params.key).slice(5).split(':')[0];
+        if (d) await markDelivered(d);
+      }
       return { key: params.key, saved: true };
 
     case 'storage_list': {
@@ -2204,6 +2257,34 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     setPassiveMode(!!message.enabled);
     sendResponse({ ok: true, enabled: passiveMode });
     return false;
+  }
+
+  // How much is actually recorded for a domain. Counts facts and log entries where
+  // the value follows the {facts,log} shape, and falls back to top-level key count
+  // for records written in another shape.
+  if (message.type === 'popup_get_site_notes') {
+    const domain = (message.domain || '').replace(/^www\./, '');
+    if (!domain) { sendResponse({ domain: null, keys: 0, facts: 0, log: 0 }); return false; }
+    chrome.storage.local.get(null).then((all) => {
+      const prefix = 'site:' + domain;
+      let keys = 0, facts = 0, log = 0, newest = null;
+      for (const k of Object.keys(all)) {
+        if (k !== prefix && !k.startsWith(prefix + ':')) continue;
+        keys++;
+        let v = all[k];
+        if (typeof v === 'string') { try { v = JSON.parse(v); } catch (_) { continue; } }
+        if (!v || typeof v !== 'object') continue;
+        if (v.facts && typeof v.facts === 'object') facts += Object.keys(v.facts).length;
+        else facts += Object.keys(v).filter(x => x !== 'log').length;
+        if (Array.isArray(v.log)) {
+          log += v.log.length;
+          for (const e of v.log) if (e && e.t && (!newest || e.t > newest)) newest = e.t;
+        }
+        if (v.savedAt && (!newest || v.savedAt > newest)) newest = v.savedAt;
+      }
+      sendResponse({ domain, keys, facts, log, newest });
+    });
+    return true;
   }
 
   if (message.type === 'popup_get_hints_mode') {

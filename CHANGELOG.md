@@ -66,6 +66,26 @@
   badge, which nobody watching a terminal would ever notice. An install that predates the
   question stays off until switched on in the popup, beside Passive Mode.
 
+- **Site notes are delivered, not just counted.** Detector 2 previously said only whether a
+  domain had notes — the caller still had to remember to fetch them, which is the same
+  forgetting problem the detectors exist to solve. On the first navigation to a domain the
+  whole record now rides out with the next carrier response. Someone working a site tends to
+  stay on it, so once per domain is cheap; records over 8KB send their key list and a pointer
+  to `browser_storage_get` instead of inlining.
+
+  Delivery is deduped in `chrome.storage.session` rather than memory. MV3 terminates the
+  worker after ~30s idle, so an in-memory set meant the full payload — roughly 3.4KB for a
+  two-record site — was re-sent after every idle gap. Session storage gives it the intended
+  lifetime: once per browser session. Writing notes for a domain also marks it delivered,
+  since the writer already holds what it just wrote.
+
+- **Site notes report and per-site counts.** The popup shows how much is recorded for the
+  current tab's domain, and View Notes opens a full report of everything under `site:*`,
+  grouped by domain, with each fact's `verifiedAt` date and age. Facts past 90 days are
+  flagged rather than hidden — stale is not the same as wrong, and deleting on a TTL throws
+  away a prior that is usually still right. Records written in an older freeform shape render
+  as raw JSON instead of being skipped, so the report cannot understate coverage.
+
 ### Internal
 - `scripts/audit-tool-surface.mjs` cross-references tool schemas, MCP handlers and both
   extensions in each direction: declared-but-never-read parameters, forwarding gaps, action
